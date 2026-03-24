@@ -2,9 +2,10 @@ interface HeaderProps {
   unreadCount: number;
   onMarkAllRead: () => void;
   onClearAll: () => void;
+  onToggleTelemetry?: () => void;
 }
 
-export function Header({ unreadCount, onMarkAllRead, onClearAll }: HeaderProps) {
+export function Header({ unreadCount, onMarkAllRead, onClearAll, onToggleTelemetry }: HeaderProps) {
   return (
     <header className="flex items-center justify-between px-4 py-3 border-b border-border-subtle bg-surface" data-tauri-drag-region>
       <div className="flex items-center gap-2" data-tauri-drag-region>
@@ -19,6 +20,28 @@ export function Header({ unreadCount, onMarkAllRead, onClearAll }: HeaderProps) 
       </div>
 
       <div className="flex items-center gap-1">
+        {onToggleTelemetry && (
+          <button
+            onClick={onToggleTelemetry}
+            className="p-1.5 text-text-tertiary hover:text-text-primary rounded-md hover:bg-surface-overlay transition-colors"
+            title="Analytics"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <line x1="18" y1="20" x2="18" y2="10" />
+              <line x1="12" y1="20" x2="12" y2="4" />
+              <line x1="6" y1="20" x2="6" y2="14" />
+            </svg>
+          </button>
+        )}
         <button
           onClick={onMarkAllRead}
           className="px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary rounded-md hover:bg-surface-overlay transition-colors"
