@@ -60,6 +60,13 @@ async fn create_notification(
         ).await;
     });
 
+    // Upsert project session (fire-and-forget)
+    let session_pool = state.db.clone();
+    let session_notification = notification.clone();
+    tokio::spawn(async move {
+        let _ = crate::db::upsert_project_session(&session_pool, &session_notification).await;
+    });
+
     Ok((StatusCode::CREATED, Json(notification)))
 }
 

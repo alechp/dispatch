@@ -70,3 +70,45 @@ pub struct TelemetrySummary {
     pub events_by_day: Vec<(String, i64)>,
     pub reads_by_method: Vec<(String, i64)>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectSession {
+    pub project: String,
+    pub source: String,
+    pub last_event_type: String,
+    pub last_title: String,
+    pub last_body: Option<String>,
+    pub last_metadata: Option<String>,
+    pub last_tmux_session: Option<String>,
+    pub last_tmux_window: Option<String>,
+    pub last_tmux_pane: Option<String>,
+    pub notification_count: i64,
+    pub unread_count: i64,
+    pub error_count: i64,
+    pub first_seen_at: String,
+    pub last_seen_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Snippet {
+    pub id: String,
+    pub trigger: String,
+    pub label: Option<String>,
+    pub body: String,
+    pub tags: Option<String>,
+    pub variables: Option<String>,
+    pub is_enabled: i32,
+    pub use_count: i64,
+    pub last_used_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VariableDef {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub var_type: String,
+    #[serde(default)]
+    pub params: std::collections::HashMap<String, serde_json::Value>,
+}

@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod expander;
 mod models;
 mod server;
 mod state;
@@ -68,20 +69,31 @@ pub fn run() {
             // Setup system tray
             tray::setup_tray(app.handle())?;
 
-            // Global hotkey: Cmd+Shift+D to toggle window
+            // Global hotkeys: Cmd+Shift+D to toggle window, Cmd+Shift+E for expander
             use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
             let shortcut: tauri_plugin_global_shortcut::Shortcut = "CommandOrControl+Shift+D".parse().unwrap();
+            let expander_shortcut: tauri_plugin_global_shortcut::Shortcut = "CommandOrControl+Shift+E".parse().unwrap();
             let shortcut_handle = app.handle().clone();
             app.handle().plugin(
                 tauri_plugin_global_shortcut::Builder::new()
-                    .with_handler(move |_app, _shortcut, event| {
+                    .with_handler(move |_app, shortcut, event| {
                         if event.state() == ShortcutState::Pressed {
                             if let Some(window) = shortcut_handle.get_webview_window("main") {
-                                if window.is_visible().unwrap_or(false) {
-                                    let _ = window.hide();
-                                } else {
+                                // Check which shortcut was pressed
+                                let shortcut_str = shortcut.to_string();
+                                if shortcut_str.contains("KeyD") || shortcut_str.contains("D") && !shortcut_str.contains("E") {
+                                    // Toggle window visibility
+                                    if window.is_visible().unwrap_or(false) {
+                                        let _ = window.hide();
+                                    } else {
+                                        let _ = window.show();
+                                        let _ = window.set_focus();
+                                    }
+                                } else if shortcut_str.contains("KeyE") || shortcut_str.contains("E") {
+                                    // Show window and emit expander event
                                     let _ = window.show();
                                     let _ = window.set_focus();
+                                    let _ = window.emit("show-expander-palette", ());
                                 }
                             }
                         }
@@ -89,6 +101,7 @@ pub fn run() {
                     .build(),
             )?;
             app.global_shortcut().register(shortcut)?;
+            app.global_shortcut().register(expander_shortcut)?;
 
             // Hide on close instead of quitting
             let window = app.get_webview_window("main").unwrap();
@@ -114,6 +127,14 @@ pub fn run() {
             commands::record_telemetry_event,
             commands::get_telemetry,
             commands::get_telemetry_summary,
+            commands::get_project_sessions,
+            commands::list_snippets,
+            commands::create_snippet,
+            commands::update_snippet,
+            commands::delete_snippet,
+            commands::expand_snippet,
+            commands::import_snippets,
+            commands::export_snippets,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

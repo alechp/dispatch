@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tauri::State;
 
 use crate::db;
+use crate::expander;
 use crate::models;
 use crate::models::{NotificationResponse, QueryParams};
 use crate::state::AppState;
@@ -41,6 +43,14 @@ pub async fn mark_notification_read(
     state: State<'_, Arc<AppState>>,
     id: String,
 ) -> Result<bool, String> {
+    // Get notification first for session tracking
+    if let Ok(Some(n)) = db::get_notification_by_id(&state.db, &id).await {
+        if n.is_read == 0 {
+            let project = n.project.as_deref().unwrap_or(&n.source);
+            let _ = db::decrement_session_unread(&state.db, project, &n.source).await;
+        }
+    }
+
     db::mark_read(&state.db, &id)
         .await
         .map_err(|e| e.to_string())
@@ -50,6 +60,7 @@ pub async fn mark_notification_read(
 pub async fn mark_all_notifications_read(
     state: State<'_, Arc<AppState>>,
 ) -> Result<u64, String> {
+    let _ = db::reset_all_session_unread(&state.db).await;
     db::mark_all_read(&state.db)
         .await
         .map_err(|e| e.to_string())
@@ -174,6 +185,132 @@ pub async fn get_telemetry_summary(
     to: String,
 ) -> Result<models::TelemetrySummary, String> {
     db::get_telemetry_summary(&state.db, &from, &to)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// --- Session Tracker commands ---
+
+#[tauri::command]
+pub async fn get_project_sessions(
+    state: State<'_, Arc<AppState>>,
+    search: Option<String>,
+) -> Result<Vec<models::ProjectSession>, String> {
+    db::get_project_sessions(&state.db, search.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// --- Text Expander commands ---
+
+#[tauri::command]
+pub async fn list_snippets(
+    state: State<'_, Arc<AppState>>,
+    search: Option<String>,
+    tag: Option<String>,
+) -> Result<Vec<models::Snippet>, String> {
+    db::list_snippets(&state.db, search.as_deref(), tag.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn create_snippet(
+    state: State<'_, Arc<AppState>>,
+    trigger: String,
+    label: Option<String>,
+    body: String,
+    tags: Option<String>,
+    variables: Option<String>,
+) -> Result<models::Snippet, String> {
+    db::create_snippet(&state.db, &trigger, label.as_deref(), &body, tags.as_deref(), variables.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_snippet(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    trigger: Option<String>,
+    label: Option<String>,
+    body: Option<String>,
+    tags: Option<String>,
+    variables: Option<String>,
+    is_enabled: Option<i32>,
+) -> Result<models::Snippet, String> {
+    db::update_snippet(&state.db, &id, trigger.as_deref(), label.as_deref(), body.as_deref(), tags.as_deref(), variables.as_deref(), is_enabled)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_snippet(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<bool, String> {
+    db::delete_snippet(&state.db, &id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn expand_snippet(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    form_values: Option<HashMap<String, String>>,
+) -> Result<String, String> {
+    let snippet = db::get_snippet(&state.db, &id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Snippet not found".to_string())?;
+
+    let expanded = expander::expand_snippet(&snippet, form_values.as_ref()).await?;
+
+    // Increment use count (fire-and-forget)
+    let pool = state.db.clone();
+    let sid = id.clone();
+    tokio::spawn(async move { let _ = db::increment_snippet_use(&pool, &sid).await; });
+
+    // Record telemetry
+    let tpool = state.db.clone();
+    let tid = id.clone();
+    tokio::spawn(async move {
+        let _ = db::record_telemetry(&tpool, "snippet_expanded", Some(&tid), None, None, None).await;
+    });
+
+    Ok(expanded)
+}
+
+#[tauri::command]
+pub async fn import_snippets(
+    state: State<'_, Arc<AppState>>,
+    snippets_json: String,
+) -> Result<u64, String> {
+    let items: Vec<serde_json::Value> = serde_json::from_str(&snippets_json)
+        .map_err(|e| e.to_string())?;
+
+    let mut count: u64 = 0;
+    for item in &items {
+        let trigger = item.get("trigger").and_then(|v| v.as_str()).unwrap_or("");
+        let label = item.get("label").and_then(|v| v.as_str());
+        let body = item.get("body").and_then(|v| v.as_str()).unwrap_or("");
+        let tags = item.get("tags").map(|v| v.to_string());
+        let variables = item.get("variables").map(|v| v.to_string());
+
+        if !trigger.is_empty() && !body.is_empty() {
+            let _ = db::create_snippet(&state.db, trigger, label, body, tags.as_deref(), variables.as_deref()).await;
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+#[tauri::command]
+pub async fn export_snippets(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<models::Snippet>, String> {
+    db::list_all_snippets(&state.db)
         .await
         .map_err(|e| e.to_string())
 }

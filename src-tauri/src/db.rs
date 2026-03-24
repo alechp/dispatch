@@ -10,6 +10,12 @@ pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::raw_sql(include_str!("../migrations/002_telemetry.sql"))
         .execute(pool)
         .await?;
+    sqlx::raw_sql(include_str!("../migrations/003_project_sessions.sql"))
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(include_str!("../migrations/004_snippets.sql"))
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -269,6 +275,260 @@ pub async fn get_telemetry_summary(
         events_by_day,
         reads_by_method,
     })
+}
+
+// --- Project Session functions ---
+
+pub async fn upsert_project_session(
+    pool: &SqlitePool,
+    notification: &crate::models::Notification,
+) -> Result<(), sqlx::Error> {
+    let project = notification.project.as_deref().unwrap_or(&notification.source);
+    let error_inc: i32 = if notification.event_type == "error" { 1 } else { 0 };
+
+    sqlx::query(
+        "INSERT INTO project_sessions (project, source, last_event_type, last_title, last_body, last_metadata, last_tmux_session, last_tmux_window, last_tmux_pane, notification_count, unread_count, error_count, first_seen_at, last_seen_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?)
+         ON CONFLICT(project, source) DO UPDATE SET
+           last_event_type = excluded.last_event_type,
+           last_title = excluded.last_title,
+           last_body = excluded.last_body,
+           last_metadata = excluded.last_metadata,
+           last_tmux_session = excluded.last_tmux_session,
+           last_tmux_window = excluded.last_tmux_window,
+           last_tmux_pane = excluded.last_tmux_pane,
+           notification_count = project_sessions.notification_count + 1,
+           unread_count = project_sessions.unread_count + 1,
+           error_count = project_sessions.error_count + excluded.error_count,
+           last_seen_at = excluded.last_seen_at"
+    )
+    .bind(project)
+    .bind(&notification.source)
+    .bind(&notification.event_type)
+    .bind(&notification.title)
+    .bind(&notification.body)
+    .bind(&notification.metadata)
+    .bind(&notification.tmux_session)
+    .bind(&notification.tmux_window)
+    .bind(&notification.tmux_pane)
+    .bind(error_inc)
+    .bind(&notification.created_at)
+    .bind(&notification.created_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn decrement_session_unread(
+    pool: &SqlitePool,
+    project: &str,
+    source: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE project_sessions SET unread_count = MAX(0, unread_count - 1) WHERE project = ? AND source = ?"
+    )
+    .bind(project)
+    .bind(source)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn reset_all_session_unread(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE project_sessions SET unread_count = 0")
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn get_project_sessions(
+    pool: &SqlitePool,
+    search: Option<&str>,
+) -> Result<Vec<crate::models::ProjectSession>, sqlx::Error> {
+    let rows: Vec<(String, String, String, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, i64, i64, i64, String, String)> = if let Some(s) = search {
+        let pattern = format!("%{}%", s);
+        sqlx::query_as(
+            "SELECT project, source, last_event_type, last_title, last_body, last_metadata, last_tmux_session, last_tmux_window, last_tmux_pane, notification_count, unread_count, error_count, first_seen_at, last_seen_at FROM project_sessions WHERE project LIKE ? ORDER BY last_seen_at DESC"
+        )
+        .bind(pattern)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query_as(
+            "SELECT project, source, last_event_type, last_title, last_body, last_metadata, last_tmux_session, last_tmux_window, last_tmux_pane, notification_count, unread_count, error_count, first_seen_at, last_seen_at FROM project_sessions ORDER BY last_seen_at DESC"
+        )
+        .fetch_all(pool)
+        .await?
+    };
+
+    Ok(rows.into_iter().map(|r| crate::models::ProjectSession {
+        project: r.0,
+        source: r.1,
+        last_event_type: r.2,
+        last_title: r.3,
+        last_body: r.4,
+        last_metadata: r.5,
+        last_tmux_session: r.6,
+        last_tmux_window: r.7,
+        last_tmux_pane: r.8,
+        notification_count: r.9,
+        unread_count: r.10,
+        error_count: r.11,
+        first_seen_at: r.12,
+        last_seen_at: r.13,
+    }).collect())
+}
+
+pub async fn get_notification_by_id(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<Option<crate::models::Notification>, sqlx::Error> {
+    let row: Option<(String, String, String, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, i32, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, source, event_type, title, body, metadata, project, tmux_session, tmux_window, tmux_pane, is_read, created_at, read_at FROM notifications WHERE id = ?"
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| crate::models::Notification {
+        id: r.0,
+        source: r.1,
+        event_type: r.2,
+        title: r.3,
+        body: r.4,
+        metadata: r.5,
+        project: r.6,
+        tmux_session: r.7,
+        tmux_window: r.8,
+        tmux_pane: r.9,
+        is_read: r.10,
+        created_at: r.11,
+        read_at: r.12,
+    }))
+}
+
+// --- Snippet functions ---
+
+pub async fn create_snippet(
+    pool: &SqlitePool,
+    trigger: &str,
+    label: Option<&str>,
+    body: &str,
+    tags: Option<&str>,
+    variables: Option<&str>,
+) -> Result<crate::models::Snippet, sqlx::Error> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    sqlx::query(
+        "INSERT INTO snippets (id, trigger, label, body, tags, variables, is_enabled, use_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?)"
+    )
+    .bind(&id).bind(trigger).bind(label).bind(body).bind(tags).bind(variables).bind(&now).bind(&now)
+    .execute(pool).await?;
+
+    // Return the created snippet
+    get_snippet(pool, &id).await.map(|opt| opt.unwrap())
+}
+
+pub async fn update_snippet(
+    pool: &SqlitePool,
+    id: &str,
+    trigger: Option<&str>,
+    label: Option<&str>,
+    body: Option<&str>,
+    tags: Option<&str>,
+    variables: Option<&str>,
+    is_enabled: Option<i32>,
+) -> Result<crate::models::Snippet, sqlx::Error> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut sets = vec!["updated_at = ?".to_string()];
+    let mut args: Vec<String> = vec![now];
+
+    if let Some(v) = trigger { sets.push("trigger = ?".into()); args.push(v.to_string()); }
+    if let Some(v) = label { sets.push("label = ?".into()); args.push(v.to_string()); }
+    if let Some(v) = body { sets.push("body = ?".into()); args.push(v.to_string()); }
+    if let Some(v) = tags { sets.push("tags = ?".into()); args.push(v.to_string()); }
+    if let Some(v) = variables { sets.push("variables = ?".into()); args.push(v.to_string()); }
+    if let Some(v) = is_enabled { sets.push("is_enabled = ?".into()); args.push(v.to_string()); }
+
+    let sql = format!("UPDATE snippets SET {} WHERE id = ?", sets.join(", "));
+    let mut query = sqlx::query(&sql);
+    for arg in &args {
+        query = query.bind(arg);
+    }
+    query = query.bind(id);
+    query.execute(pool).await?;
+
+    get_snippet(pool, id).await.map(|opt| opt.unwrap())
+}
+
+pub async fn delete_snippet(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM snippets WHERE id = ?")
+        .bind(id).execute(pool).await?;
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn get_snippet(pool: &SqlitePool, id: &str) -> Result<Option<crate::models::Snippet>, sqlx::Error> {
+    let row: Option<(String, String, Option<String>, String, Option<String>, Option<String>, i32, i64, Option<String>, String, String)> = sqlx::query_as(
+        "SELECT id, trigger, label, body, tags, variables, is_enabled, use_count, last_used_at, created_at, updated_at FROM snippets WHERE id = ?"
+    ).bind(id).fetch_optional(pool).await?;
+
+    Ok(row.map(|r| crate::models::Snippet {
+        id: r.0, trigger: r.1, label: r.2, body: r.3, tags: r.4, variables: r.5,
+        is_enabled: r.6, use_count: r.7, last_used_at: r.8, created_at: r.9, updated_at: r.10,
+    }))
+}
+
+pub async fn list_snippets(
+    pool: &SqlitePool,
+    search: Option<&str>,
+    tag: Option<&str>,
+) -> Result<Vec<crate::models::Snippet>, sqlx::Error> {
+    let mut sql = String::from("SELECT id, trigger, label, body, tags, variables, is_enabled, use_count, last_used_at, created_at, updated_at FROM snippets WHERE is_enabled = 1");
+    let mut args: Vec<String> = Vec::new();
+
+    if let Some(s) = search {
+        sql.push_str(" AND (trigger LIKE ? OR label LIKE ? OR body LIKE ? OR tags LIKE ?)");
+        let pattern = format!("%{}%", s);
+        args.push(pattern.clone());
+        args.push(pattern.clone());
+        args.push(pattern.clone());
+        args.push(pattern);
+    }
+    if let Some(t) = tag {
+        sql.push_str(" AND tags LIKE ?");
+        args.push(format!("%\"{}\"%" , t));
+    }
+    sql.push_str(" ORDER BY use_count DESC, updated_at DESC");
+
+    let mut query = sqlx::query_as::<_, (String, String, Option<String>, String, Option<String>, Option<String>, i32, i64, Option<String>, String, String)>(&sql);
+    for arg in &args {
+        query = query.bind(arg);
+    }
+    let rows = query.fetch_all(pool).await?;
+
+    Ok(rows.into_iter().map(|r| crate::models::Snippet {
+        id: r.0, trigger: r.1, label: r.2, body: r.3, tags: r.4, variables: r.5,
+        is_enabled: r.6, use_count: r.7, last_used_at: r.8, created_at: r.9, updated_at: r.10,
+    }).collect())
+}
+
+pub async fn list_all_snippets(pool: &SqlitePool) -> Result<Vec<crate::models::Snippet>, sqlx::Error> {
+    let rows: Vec<(String, String, Option<String>, String, Option<String>, Option<String>, i32, i64, Option<String>, String, String)> = sqlx::query_as(
+        "SELECT id, trigger, label, body, tags, variables, is_enabled, use_count, last_used_at, created_at, updated_at FROM snippets ORDER BY updated_at DESC"
+    ).fetch_all(pool).await?;
+
+    Ok(rows.into_iter().map(|r| crate::models::Snippet {
+        id: r.0, trigger: r.1, label: r.2, body: r.3, tags: r.4, variables: r.5,
+        is_enabled: r.6, use_count: r.7, last_used_at: r.8, created_at: r.9, updated_at: r.10,
+    }).collect())
+}
+
+pub async fn increment_snippet_use(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query("UPDATE snippets SET use_count = use_count + 1, last_used_at = ? WHERE id = ?")
+        .bind(&now).bind(id).execute(pool).await?;
+    Ok(())
 }
 
 #[cfg(test)]
