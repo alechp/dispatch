@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import type { Notification } from "../lib/types";
 
 interface NotificationCardProps {
@@ -5,6 +6,7 @@ interface NotificationCardProps {
   onMarkRead: (id: string) => void;
   onDelete: (id: string) => void;
   onFocusTerminal: (id: string, session: string, window: string | null, pane: string | null) => void;
+  isSelected?: boolean;
 }
 
 function timeAgo(dateStr: string): string {
@@ -39,14 +41,23 @@ export function NotificationCard({
   onMarkRead,
   onDelete,
   onFocusTerminal,
+  isSelected = false,
 }: NotificationCardProps) {
   const isUnread = n.is_read === 0;
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (isSelected && cardRef.current) {
+      cardRef.current.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [isSelected]);
 
   return (
     <div
+      ref={cardRef}
       className={`group relative px-4 py-3 border-b border-border-subtle transition-colors ${
         isUnread ? "bg-surface-raised" : "bg-surface"
-      } hover:bg-surface-overlay`}
+      } hover:bg-surface-overlay ${isSelected ? "ring-1 ring-accent/40 bg-surface-overlay" : ""}`}
       onClick={() => isUnread && onMarkRead(n.id)}
     >
       <div className="flex items-start gap-3">
