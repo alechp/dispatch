@@ -8,6 +8,8 @@ import { useNotificationListener } from "./hooks/useNotificationListener";
 import { useSound } from "./hooks/useSound";
 import { useHotkeys } from "./hooks/useHotkeys";
 import { deleteNotification, focusTerminal } from "./lib/api";
+import { trackEvent } from "./lib/telemetry";
+import { TelemetryScreen } from "./components/TelemetryScreen";
 import type { Notification, QueryFilters } from "./lib/types";
 
 export default function App() {
@@ -15,6 +17,7 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [showHelp, setShowHelp] = useState(false);
+  const [showTelemetry, setShowTelemetry] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const queryFilters: QueryFilters = {
@@ -42,6 +45,7 @@ export default function App() {
   const handleDelete = useCallback(
     async (id: string) => {
       await deleteNotification(id);
+      trackEvent("notification_deleted", { targetId: id, metadata: { method: "click" } });
       refresh();
     },
     [refresh]
@@ -50,7 +54,17 @@ export default function App() {
   const handleFocusTerminal = useCallback(
     async (id: string, session: string, window: string | null, pane: string | null) => {
       markRead(id);
+      trackEvent("notification_read", { targetId: id, metadata: { method: "terminal_focus" } });
+      trackEvent("terminal_focused", { targetId: id, metadata: { session, window, pane } });
       await focusTerminal(session, window ?? undefined, pane ?? undefined);
+    },
+    [markRead]
+  );
+
+  const handleMarkRead = useCallback(
+    (id: string) => {
+      markRead(id);
+      trackEvent("notification_read", { targetId: id, metadata: { method: "click" } });
     },
     [markRead]
   );
@@ -78,12 +92,16 @@ export default function App() {
       },
       markSelectedRead: () => {
         if (selectedIndex !== null && notifications[selectedIndex]) {
-          markRead(notifications[selectedIndex].id);
+          const n = notifications[selectedIndex];
+          markRead(n.id);
+          trackEvent("notification_read", { targetId: n.id, metadata: { method: "hotkey" } });
         }
       },
       deleteSelected: () => {
         if (selectedIndex !== null && notifications[selectedIndex]) {
-          handleDelete(notifications[selectedIndex].id);
+          const n = notifications[selectedIndex];
+          handleDelete(n.id);
+          trackEvent("notification_deleted", { targetId: n.id, metadata: { method: "hotkey" } });
           setSelectedIndex((prev) => {
             if (prev === null) return null;
             if (prev >= notifications.length - 1) return Math.max(0, prev - 1);
@@ -99,11 +117,20 @@ export default function App() {
           }
         }
       },
-      markAllRead: () => markAllRead(),
-      clearAll: () => clearAll(),
+      markAllRead: () => {
+        markAllRead();
+        trackEvent("notification_read", { metadata: { method: "mark_all" } });
+      },
+      clearAll: () => {
+        trackEvent("clear_all", { metadata: { count: notifications.length } });
+        clearAll();
+      },
       focusSearch: () => searchRef.current?.focus(),
       clearSelection: () => setSelectedIndex(null),
-      setFilter: (f: "all" | "unread" | "read") => setFilter(f),
+      setFilter: (f: "all" | "unread" | "read") => {
+        setFilter(f);
+        trackEvent("filter_changed", { metadata: { filter: f } });
+      },
       toggleHelp: () => setShowHelp((prev) => !prev),
     }),
     [selectedIndex, notifications, markRead, handleDelete, handleFocusTerminal, markAllRead, clearAll]
@@ -117,21 +144,28 @@ export default function App() {
         unreadCount={filter === "all" ? unreadCount : total}
         onMarkAllRead={markAllRead}
         onClearAll={clearAll}
+        onToggleTelemetry={() => setShowTelemetry((prev) => !prev)}
       />
-      <FilterBar
-        onSearchChange={setSearch}
-        onFilterChange={setFilter}
-        activeFilter={filter}
-        searchRef={searchRef}
-      />
-      <NotificationFeed
-        notifications={notifications}
-        loading={loading}
-        onMarkRead={markRead}
-        onDelete={handleDelete}
-        onFocusTerminal={handleFocusTerminal}
-        selectedIndex={selectedIndex}
-      />
+      {showTelemetry ? (
+        <TelemetryScreen onBack={() => setShowTelemetry(false)} />
+      ) : (
+        <>
+          <FilterBar
+            onSearchChange={setSearch}
+            onFilterChange={setFilter}
+            activeFilter={filter}
+            searchRef={searchRef}
+          />
+          <NotificationFeed
+            notifications={notifications}
+            loading={loading}
+            onMarkRead={handleMarkRead}
+            onDelete={handleDelete}
+            onFocusTerminal={handleFocusTerminal}
+            selectedIndex={selectedIndex}
+          />
+        </>
+      )}
       {showHelp && <HotkeyHelp onClose={() => setShowHelp(false)} />}
     </div>
   );
