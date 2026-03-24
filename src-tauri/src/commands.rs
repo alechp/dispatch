@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::db;
+use crate::models;
 use crate::models::{NotificationResponse, QueryParams};
 use crate::state::AppState;
 
@@ -124,4 +125,55 @@ pub async fn focus_terminal(
         return Err(String::from_utf8_lossy(&output.stderr).to_string());
     }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn record_telemetry_event(
+    state: State<'_, Arc<AppState>>,
+    event_type: String,
+    target_id: Option<String>,
+    source: Option<String>,
+    project: Option<String>,
+    metadata: Option<String>,
+) -> Result<(), String> {
+    db::record_telemetry(
+        &state.db,
+        &event_type,
+        target_id.as_deref(),
+        source.as_deref(),
+        project.as_deref(),
+        metadata.as_deref(),
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_telemetry(
+    state: State<'_, Arc<AppState>>,
+    event_type: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
+    limit: Option<i64>,
+) -> Result<Vec<models::TelemetryEvent>, String> {
+    db::query_telemetry(
+        &state.db,
+        event_type.as_deref(),
+        from.as_deref(),
+        to.as_deref(),
+        limit,
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_telemetry_summary(
+    state: State<'_, Arc<AppState>>,
+    from: String,
+    to: String,
+) -> Result<models::TelemetrySummary, String> {
+    db::get_telemetry_summary(&state.db, &from, &to)
+        .await
+        .map_err(|e| e.to_string())
 }

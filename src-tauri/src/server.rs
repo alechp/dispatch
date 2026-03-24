@@ -44,6 +44,22 @@ async fn create_notification(
     // Broadcast to all listeners (WebSocket + Tauri events)
     let _ = state.tx.send(notification.clone());
 
+    // Record telemetry (fire-and-forget)
+    let telem_pool = state.db.clone();
+    let telem_id = notification.id.clone();
+    let telem_source = req.source.clone();
+    let telem_project = req.project.clone();
+    tokio::spawn(async move {
+        let _ = crate::db::record_telemetry(
+            &telem_pool,
+            "notification_received",
+            Some(&telem_id),
+            telem_source.as_deref(),
+            telem_project.as_deref(),
+            None,
+        ).await;
+    });
+
     Ok((StatusCode::CREATED, Json(notification)))
 }
 

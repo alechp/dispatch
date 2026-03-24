@@ -68,6 +68,28 @@ pub fn run() {
             // Setup system tray
             tray::setup_tray(app.handle())?;
 
+            // Global hotkey: Cmd+Shift+D to toggle window
+            use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+            let shortcut: tauri_plugin_global_shortcut::Shortcut = "CommandOrControl+Shift+D".parse().unwrap();
+            let shortcut_handle = app.handle().clone();
+            app.handle().plugin(
+                tauri_plugin_global_shortcut::Builder::new()
+                    .with_handler(move |_app, _shortcut, event| {
+                        if event.state() == ShortcutState::Pressed {
+                            if let Some(window) = shortcut_handle.get_webview_window("main") {
+                                if window.is_visible().unwrap_or(false) {
+                                    let _ = window.hide();
+                                } else {
+                                    let _ = window.show();
+                                    let _ = window.set_focus();
+                                }
+                            }
+                        }
+                    })
+                    .build(),
+            )?;
+            app.global_shortcut().register(shortcut)?;
+
             // Hide on close instead of quitting
             let window = app.get_webview_window("main").unwrap();
             window.on_window_event(move |event| {
@@ -89,6 +111,9 @@ pub fn run() {
             commands::clear_all_notifications,
             commands::get_unread_count,
             commands::focus_terminal,
+            commands::record_telemetry_event,
+            commands::get_telemetry,
+            commands::get_telemetry_summary,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
