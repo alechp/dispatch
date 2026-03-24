@@ -7,6 +7,7 @@ interface NotificationCardProps {
   onDelete: (id: string) => void;
   onFocusTerminal: (id: string, session: string, window: string | null, pane: string | null) => void;
   isSelected?: boolean;
+  index: number;
 }
 
 function timeAgo(dateStr: string): string {
@@ -42,6 +43,7 @@ export function NotificationCard({
   onDelete,
   onFocusTerminal,
   isSelected = false,
+  index,
 }: NotificationCardProps) {
   const isUnread = n.is_read === 0;
   const cardRef = useRef<HTMLDivElement>(null);
@@ -56,18 +58,23 @@ export function NotificationCard({
     <div
       ref={cardRef}
       className={`group relative px-4 py-3 border-b border-border-subtle transition-colors ${
-        isUnread ? "bg-surface-raised" : "bg-surface"
-      } hover:bg-surface-overlay ${isSelected ? "ring-1 ring-accent/40 bg-surface-overlay" : ""}`}
+        isSelected
+          ? "bg-accent/10 border-l-2 border-l-accent"
+          : isUnread
+            ? "bg-surface-raised"
+            : "bg-surface"
+      } hover:bg-surface-overlay`}
       onClick={() => isUnread && onMarkRead(n.id)}
     >
       <div className="flex items-start gap-3">
-        {/* Unread indicator */}
-        <div className="pt-1.5 shrink-0">
+        {/* Index + unread indicator */}
+        <div className="flex flex-col items-center shrink-0 pt-0.5" style={{ minWidth: 16 }}>
           <div
             className={`w-2 h-2 rounded-full ${
               isUnread ? eventColor(n.event_type) : "bg-transparent"
             }`}
           />
+          <span className="text-[9px] text-text-tertiary mt-0.5 leading-none">{index + 1}</span>
         </div>
 
         <div className="flex-1 min-w-0">

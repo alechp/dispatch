@@ -41,6 +41,7 @@ export function NotificationFeed({
           onDelete={onDelete}
           onFocusTerminal={onFocusTerminal}
           isSelected={i === selectedIndex}
+          index={i}
         />
       ))}
     </div>

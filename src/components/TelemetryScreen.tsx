@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { useTelemetry } from "../hooks/useTelemetry";
 
 interface TelemetryScreenProps {
@@ -13,20 +13,6 @@ const TIME_RANGE_OPTIONS: { key: TimeRange; label: string }[] = [
   { key: "30d", label: "Last 30 days" },
   { key: "all", label: "All time" },
 ];
-
-function formatDuration(seconds: number): string {
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.round(seconds % 60);
-  return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
-}
-
-function formatHour(hour: number): string {
-  if (hour === 0) return "12:00 AM";
-  if (hour < 12) return `${hour}:00 AM`;
-  if (hour === 12) return "12:00 PM";
-  return `${hour - 12}:00 PM`;
-}
 
 function timeAgo(dateStr: string): string {
   const now = Date.now();
@@ -137,24 +123,6 @@ export function TelemetryScreen({ onBack }: TelemetryScreenProps) {
           <StatCard value={summary.total_received} label="Received" />
           <StatCard value={summary.total_read} label="Read" />
           <StatCard value={summary.total_terminal_focuses} label="Focused" />
-        </div>
-
-        {/* Secondary Stats */}
-        <div className="grid grid-cols-2 gap-2 px-4 pb-4">
-          <div className="rounded-lg bg-surface-raised border border-border-subtle p-3">
-            <p className="text-lg font-semibold text-text-primary">
-              {summary.avg_time_to_read_seconds != null
-                ? formatDuration(summary.avg_time_to_read_seconds)
-                : "--"}
-            </p>
-            <p className="text-[11px] text-text-tertiary mt-0.5">Avg. time to read</p>
-          </div>
-          <div className="rounded-lg bg-surface-raised border border-border-subtle p-3">
-            <p className="text-lg font-semibold text-text-primary">
-              {summary.busiest_hour != null ? formatHour(summary.busiest_hour) : "--"}
-            </p>
-            <p className="text-[11px] text-text-tertiary mt-0.5">Busiest hour</p>
-          </div>
         </div>
 
         {/* Activity Chart */}
@@ -282,6 +250,22 @@ function TopBar({
   timeRange: TimeRange;
   onTimeRangeChange: (range: TimeRange) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("click", handleClick);
+    return () => document.removeEventListener("click", handleClick);
+  }, [open]);
+
+  const currentLabel = TIME_RANGE_OPTIONS.find((o) => o.key === timeRange)?.label ?? "Select";
+
   return (
     <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle bg-surface shrink-0">
       <button
@@ -302,17 +286,50 @@ function TopBar({
         </svg>
         Back
       </button>
-      <select
-        value={timeRange}
-        onChange={(e) => onTimeRangeChange(e.target.value as TimeRange)}
-        className="text-[11px] bg-surface-overlay border border-border-subtle rounded-md px-2 py-1 text-text-secondary focus:outline-none focus:border-accent transition-colors cursor-pointer"
-      >
-        {TIME_RANGE_OPTIONS.map((opt) => (
-          <option key={opt.key} value={opt.key}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
+      <div className="relative" ref={dropdownRef}>
+        <button
+          onClick={() => setOpen((prev) => !prev)}
+          className="flex items-center gap-1.5 text-[11px] bg-surface-overlay border border-border-subtle rounded-md px-2.5 py-1 text-text-secondary hover:text-text-primary hover:border-accent/50 focus:outline-none focus:border-accent transition-colors cursor-pointer"
+        >
+          {currentLabel}
+          <svg
+            width="10"
+            height="10"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={`transition-transform ${open ? "rotate-180" : ""}`}
+          >
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+        {open && (
+          <div className="absolute right-0 mt-1 w-36 bg-surface-raised border border-border-subtle rounded-md shadow-xl z-50 overflow-hidden">
+            {TIME_RANGE_OPTIONS.map((opt) => (
+              <button
+                key={opt.key}
+                onClick={() => {
+                  onTimeRangeChange(opt.key);
+                  setOpen(false);
+                }}
+                className={`w-full text-left px-3 py-1.5 text-[11px] transition-colors ${
+                  opt.key === timeRange
+                    ? "bg-accent/15 text-accent"
+                    : "text-text-secondary hover:bg-surface-overlay hover:text-text-primary"
+                }`}
+              >
+                {opt.key === timeRange && (
+                  <span className="mr-1.5">&#10003;</span>
+                )}
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
