@@ -43,10 +43,11 @@ export default function App() {
   );
 
   const handleFocusTerminal = useCallback(
-    async (session: string, window: string | null, pane: string | null) => {
+    async (id: string, session: string, window: string | null, pane: string | null) => {
+      markRead(id);
       await focusTerminal(session, window ?? undefined, pane ?? undefined);
     },
-    []
+    [markRead]
   );
 
   useNotificationListener(handleNewNotification, refresh);

@@ -7,7 +7,7 @@ interface NotificationFeedProps {
   loading: boolean;
   onMarkRead: (id: string) => void;
   onDelete: (id: string) => void;
-  onFocusTerminal: (session: string, window: string | null, pane: string | null) => void;
+  onFocusTerminal: (id: string, session: string, window: string | null, pane: string | null) => void;
 }
 
 export function NotificationFeed({

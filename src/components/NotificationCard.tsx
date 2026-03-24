@@ -4,7 +4,7 @@ interface NotificationCardProps {
   notification: Notification;
   onMarkRead: (id: string) => void;
   onDelete: (id: string) => void;
-  onFocusTerminal: (session: string, window: string | null, pane: string | null) => void;
+  onFocusTerminal: (id: string, session: string, window: string | null, pane: string | null) => void;
 }
 
 function timeAgo(dateStr: string): string {
@@ -128,7 +128,7 @@ export function NotificationCard({
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                onFocusTerminal(n.tmux_session!, n.tmux_window, n.tmux_pane);
+                onFocusTerminal(n.id, n.tmux_session!, n.tmux_window, n.tmux_pane);
               }}
               className="opacity-0 group-hover:opacity-100 p-1 text-text-tertiary hover:text-accent rounded transition-all"
               title="Focus terminal"
