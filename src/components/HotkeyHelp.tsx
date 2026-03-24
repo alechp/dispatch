@@ -1,3 +1,5 @@
+import { useEffect } from "react";
+
 interface HotkeyHelpProps {
   onClose: () => void;
 }
@@ -55,6 +57,17 @@ function KeyBadge({ label }: { label: string }) {
 }
 
 export function HotkeyHelp({ onClose }: HotkeyHelpProps) {
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [onClose]);
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-surface/80 backdrop-blur-sm"

@@ -145,6 +145,7 @@ export default function App() {
         onMarkAllRead={markAllRead}
         onClearAll={clearAll}
         onToggleTelemetry={() => setShowTelemetry((prev) => !prev)}
+        onToggleHelp={() => setShowHelp((prev) => !prev)}
       />
       {showTelemetry ? (
         <TelemetryScreen onBack={() => setShowTelemetry(false)} />
