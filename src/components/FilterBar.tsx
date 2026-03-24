@@ -4,9 +4,10 @@ interface FilterBarProps {
   onSearchChange: (search: string) => void;
   onFilterChange: (filter: "all" | "unread" | "read") => void;
   activeFilter: "all" | "unread" | "read";
+  searchRef?: React.RefObject<HTMLInputElement>;
 }
 
-export function FilterBar({ onSearchChange, onFilterChange, activeFilter }: FilterBarProps) {
+export function FilterBar({ onSearchChange, onFilterChange, activeFilter, searchRef }: FilterBarProps) {
   const [search, setSearch] = useState("");
 
   useEffect(() => {
@@ -23,6 +24,7 @@ export function FilterBar({ onSearchChange, onFilterChange, activeFilter }: Filt
   return (
     <div className="px-4 py-2 border-b border-border-subtle space-y-2">
       <input
+        ref={searchRef}
         type="text"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
