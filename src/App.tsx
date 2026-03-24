@@ -12,12 +12,14 @@ import { trackEvent } from "./lib/telemetry";
 import { TelemetryScreen } from "./components/TelemetryScreen";
 import type { Notification, QueryFilters } from "./lib/types";
 
+export type ActiveScreen = "feed" | "telemetry" | "sessions" | "expander";
+
 export default function App() {
   const [filter, setFilter] = useState<"all" | "unread" | "read">("all");
   const [search, setSearch] = useState("");
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [showHelp, setShowHelp] = useState(false);
-  const [showTelemetry, setShowTelemetry] = useState(false);
+  const [activeScreen, setActiveScreen] = useState<ActiveScreen>("feed");
   const searchRef = useRef<HTMLInputElement>(null);
 
   const queryFilters: QueryFilters = {
@@ -144,11 +146,11 @@ export default function App() {
         unreadCount={filter === "all" ? unreadCount : total}
         onMarkAllRead={markAllRead}
         onClearAll={clearAll}
-        onToggleTelemetry={() => setShowTelemetry((prev) => !prev)}
+        activeScreen={activeScreen}
+        onScreenChange={setActiveScreen}
+        onToggleHelp={() => setShowHelp((prev) => !prev)}
       />
-      {showTelemetry ? (
-        <TelemetryScreen onBack={() => setShowTelemetry(false)} />
-      ) : (
+      {activeScreen === "feed" && (
         <>
           <FilterBar
             onSearchChange={setSearch}
@@ -166,6 +168,11 @@ export default function App() {
           />
         </>
       )}
+      {activeScreen === "telemetry" && (
+        <TelemetryScreen onBack={() => setActiveScreen("feed")} />
+      )}
+      {/* activeScreen === "sessions" — SessionsScreen not yet implemented */}
+      {/* activeScreen === "expander" — ExpanderScreen not yet implemented */}
       {showHelp && <HotkeyHelp onClose={() => setShowHelp(false)} />}
     </div>
   );
