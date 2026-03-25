@@ -19,9 +19,18 @@ pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::raw_sql(include_str!("../migrations/005_live_expansion.sql"))
         .execute(pool)
         .await?;
-    sqlx::raw_sql(include_str!("../migrations/006_project_metadata.sql"))
-        .execute(pool)
-        .await?;
+
+    // Migration 006: ALTER TABLE ADD COLUMN is not idempotent in SQLite.
+    // Run each statement individually and ignore "duplicate column" errors.
+    for stmt in ["ALTER TABLE project_sessions ADD COLUMN directory TEXT",
+                 "ALTER TABLE project_sessions ADD COLUMN git_remote TEXT"] {
+        if let Err(e) = sqlx::query(stmt).execute(pool).await {
+            if !e.to_string().contains("duplicate column") {
+                return Err(e);
+            }
+        }
+    }
+
     sqlx::raw_sql(include_str!("../migrations/007_yapture_settings.sql"))
         .execute(pool)
         .await?;

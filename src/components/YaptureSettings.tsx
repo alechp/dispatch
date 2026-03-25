@@ -43,14 +43,18 @@ export function YaptureSettings({ onBack }: YaptureSettingsProps) {
   }, []);
 
   async function loadState() {
-    const [cfg, conn] = await Promise.all([
-      getYaptureConfig(),
-      getYaptureConnectionStatus(),
-    ]);
-    setConfig(cfg);
-    setConnection(conn);
-    setApiUrl(cfg.api_url);
-    setUserId(cfg.user_id);
+    try {
+      const [cfg, conn] = await Promise.all([
+        getYaptureConfig(),
+        getYaptureConnectionStatus(),
+      ]);
+      setConfig(cfg);
+      setConnection(conn);
+      setApiUrl(cfg.apiUrl);
+      setUserId(cfg.userId);
+    } catch (e) {
+      console.error("[yapture-settings] loadState failed:", e);
+    }
   }
 
   async function handleConnect() {
@@ -110,7 +114,7 @@ export function YaptureSettings({ onBack }: YaptureSettingsProps) {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-surface">
+    <div className="flex flex-col flex-1 min-h-0 bg-surface">
       {/* Top bar */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-border-subtle bg-surface shrink-0">
         <button

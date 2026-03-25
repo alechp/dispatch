@@ -406,8 +406,8 @@ pub async fn get_yapture_config(
         .await
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
-    let has_token = std::env::var("YAPTURE_SERVICE_TOKEN")
-        .map(|t| !t.is_empty())
+    let has_token = state.yapture_tokens.lock()
+        .map(|t| t.service_token.as_ref().map(|s| !s.is_empty()).unwrap_or(false))
         .unwrap_or(false);
 
     Ok(yapture::YaptureConfigResponse {
@@ -442,8 +442,8 @@ pub async fn set_yapture_config(
             .map_err(|e| e.to_string())?;
     }
     if let Some(token) = service_token {
-        // For now, store as env var (in-memory only). Future: keychain.
-        unsafe { std::env::set_var("YAPTURE_SERVICE_TOKEN", &token) };
+        let mut tokens = state.yapture_tokens.lock().map_err(|e| e.to_string())?;
+        tokens.service_token = Some(token);
     }
     Ok(())
 }
@@ -456,7 +456,9 @@ pub async fn test_yapture_connection(
         .await
         .map_err(|e| e.to_string())?
         .unwrap_or_else(|| "https://api.yapture.app".to_string());
-    let service_token = std::env::var("YAPTURE_SERVICE_TOKEN").unwrap_or_default();
+    let service_token = state.yapture_tokens.lock()
+        .map(|t| t.service_token.clone().unwrap_or_default())
+        .unwrap_or_default();
     Ok(yapture::test_connection(&api_url, &service_token).await)
 }
 
@@ -497,10 +499,8 @@ pub async fn yapture_disconnect(
         .await
         .map_err(|e| e.to_string())?;
     // Clear tokens
-    unsafe {
-        std::env::remove_var("YAPTURE_SERVICE_TOKEN");
-        std::env::remove_var("YAPTURE_ACCESS_TOKEN");
-        std::env::remove_var("YAPTURE_REFRESH_TOKEN");
+    if let Ok(mut tokens) = state.yapture_tokens.lock() {
+        *tokens = crate::state::YaptureTokens::default();
     }
     Ok(())
 }

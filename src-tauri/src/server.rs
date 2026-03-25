@@ -70,8 +70,11 @@ async fn create_notification(
     // Push to Yapture (fire-and-forget)
     let yapture_pool = state.db.clone();
     let yapture_notification = notification.clone();
+    let yapture_token = state.yapture_tokens.lock()
+        .ok()
+        .and_then(|t| t.service_token.clone());
     tokio::spawn(async move {
-        if let Some(config) = crate::yapture::load_config(&yapture_pool).await {
+        if let Some(config) = crate::yapture::load_config(&yapture_pool, yapture_token).await {
             crate::yapture::push_notification(&config, &yapture_notification).await;
         }
     });

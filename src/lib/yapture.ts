@@ -2,9 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 
 export interface YaptureConfig {
   enabled: boolean;
-  api_url: string;
-  user_id: string;
-  has_token: boolean;
+  apiUrl: string;
+  userId: string;
+  hasToken: boolean;
 }
 
 export interface YaptureConnectionStatus {

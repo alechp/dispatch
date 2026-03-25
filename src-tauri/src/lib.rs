@@ -2,6 +2,7 @@ mod commands;
 mod db;
 mod expander;
 mod live_listener;
+mod log;
 mod macos_accessibility;
 mod models;
 mod server;
@@ -21,6 +22,13 @@ use crate::state::AppState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Install panic hook so silent panics are logged to file
+    std::panic::set_hook(Box::new(|info| {
+        let msg = format!("PANIC: {}", info);
+        crate::log::log(&msg);
+        eprintln!("[dispatch] {}", msg);
+    }));
+
     tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
@@ -30,18 +38,27 @@ pub fn run() {
             // Resolve database path
             let app_data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&app_data_dir)?;
+
+            // Initialize file logging ASAP
+            crate::log::init(&app_data_dir);
+            dlog!("setup: app_data_dir = {}", app_data_dir.display());
+
             let db_path = app_data_dir.join("dispatch.db");
             let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+            dlog!("setup: db_url = {}", db_url);
 
             // Block on async init during setup
+            dlog!("setup: starting async init (db + state)");
             let state = tauri::async_runtime::block_on(async {
                 let pool = SqlitePoolOptions::new()
                     .max_connections(5)
                     .connect(&db_url)
                     .await
                     .expect("Failed to connect to SQLite");
+                dlog!("setup: SQLite connected");
 
                 db::init_db(&pool).await.expect("Failed to run migrations");
+                dlog!("setup: migrations complete");
 
                 let state = Arc::new(AppState::new(pool));
 
@@ -55,22 +72,40 @@ pub fn run() {
                 // Refresh trigger cache
                 let _ =
                     trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
+                dlog!("setup: state initialized, trigger cache loaded");
 
                 state
             });
 
             // Manage state
             app.manage(state.clone());
+            dlog!("setup: state managed");
 
             // Start live expansion listener + match handler
+            //
+            // DISABLED on macOS: rdev::listen calls TSMGetInputSourceProperty from a
+            // background thread, but macOS requires it on the main dispatch queue.
+            // This causes EXC_BREAKPOINT / SIGTRAP (_dispatch_assert_queue_fail)
+            // that instantly kills the process. The rdev listener is disabled until
+            // we replace rdev with a main-thread-safe alternative.
+            // See: https://github.com/Narsil/rdev/issues/124
             {
-                let (match_tx, match_rx) = crossbeam_channel::unbounded();
+                #[cfg(not(target_os = "macos"))]
+                let (match_tx, match_rx) = crossbeam_channel::unbounded::<live_listener::TriggerMatch>();
+                #[cfg(target_os = "macos")]
+                let (_match_tx, match_rx) = crossbeam_channel::unbounded::<live_listener::TriggerMatch>();
 
+                #[cfg(not(target_os = "macos"))]
                 live_listener::start_listener(
                     state.live_expansion_enabled.clone(),
                     state.trigger_cache.clone(),
                     match_tx,
                 );
+
+                #[cfg(target_os = "macos")]
+                {
+                    dlog!("setup: live-expansion listener DISABLED on macOS (rdev TSM crash)");
+                }
 
                 // Spawn tokio task to handle matches
                 let handler_state = state.clone();
@@ -175,6 +210,7 @@ pub fn run() {
             }
 
             // Spawn the axum HTTP server
+            dlog!("setup: spawning HTTP server");
             let server_state = state.clone();
             let event_state = state.clone();
             let event_handle = app_handle.clone();
@@ -184,7 +220,7 @@ pub fn run() {
                 let listener = tokio::net::TcpListener::bind("127.0.0.1:9394")
                     .await
                     .expect("Failed to bind port 9394");
-                println!("Dispatch server listening on http://127.0.0.1:9394");
+                dlog!("server: listening on http://127.0.0.1:9394");
                 axum::serve(listener, router).await.unwrap();
             });
 
@@ -199,7 +235,9 @@ pub fn run() {
             });
 
             // Setup system tray
+            dlog!("setup: creating system tray");
             tray::setup_tray(app.handle())?;
+            dlog!("setup: system tray created");
 
             // Deep link handler for OAuth callback
             {
@@ -296,14 +334,11 @@ pub fn run() {
 
                         eprintln!("[oauth] tokens received");
 
-                        // Store tokens (env for now, keychain later)
-                        unsafe {
-                            std::env::set_var("YAPTURE_ACCESS_TOKEN", &tokens.access_token);
-                            if let Some(ref rt) = tokens.refresh_token {
-                                std::env::set_var("YAPTURE_REFRESH_TOKEN", rt);
-                            }
-                            // Also set as service token for API calls
-                            std::env::set_var("YAPTURE_SERVICE_TOKEN", &tokens.access_token);
+                        // Store tokens in AppState
+                        if let Ok(mut t) = state_for_async.yapture_tokens.lock() {
+                            t.access_token = Some(tokens.access_token.clone());
+                            t.refresh_token = tokens.refresh_token.clone();
+                            t.service_token = Some(tokens.access_token.clone());
                         }
 
                         // Fetch user info
@@ -362,6 +397,7 @@ pub fn run() {
             }
 
             // Global hotkeys: Cmd+Shift+D to toggle window, Cmd+Shift+E for expander
+            dlog!("setup: registering global shortcuts");
             use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
             let shortcut: tauri_plugin_global_shortcut::Shortcut =
                 "CommandOrControl+Shift+D".parse().unwrap();
@@ -401,17 +437,27 @@ pub fn run() {
             app.global_shortcut().register(shortcut)?;
             app.global_shortcut().register(expander_shortcut)?;
 
+            dlog!("setup: shortcuts registered");
+
             // Hide on close instead of quitting
             let window = app.get_webview_window("main").unwrap();
             window.on_window_event(move |event| {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    if let Some(w) = app_handle.get_webview_window("main") {
-                        let _ = w.hide();
+                match event {
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        eprintln!("[dispatch] on_window_event: CloseRequested — hiding window");
+                        api.prevent_close();
+                        if let Some(w) = app_handle.get_webview_window("main") {
+                            let _ = w.hide();
+                        }
                     }
+                    tauri::WindowEvent::Destroyed => {
+                        eprintln!("[dispatch] on_window_event: Destroyed");
+                    }
+                    _ => {}
                 }
             });
 
+            dlog!("setup: COMPLETE — app ready");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -452,20 +498,34 @@ pub fn run() {
                 tauri::RunEvent::ExitRequested { api, .. } => {
                     // Prevent the app from exiting when all windows close.
                     // This is a tray app — it should keep running in the background.
-                    eprintln!("[dispatch] ExitRequested — preventing exit (tray app)");
+                    dlog!("RunEvent::ExitRequested — preventing exit (tray app)");
                     api.prevent_exit();
                 }
                 tauri::RunEvent::WindowEvent {
                     label,
-                    event: tauri::WindowEvent::Destroyed,
+                    event: ref window_event,
                     ..
                 } => {
-                    eprintln!("[dispatch] window '{}' destroyed", label);
+                    match window_event {
+                        tauri::WindowEvent::Destroyed => {
+                            dlog!("window '{}' destroyed", label);
+                        }
+                        tauri::WindowEvent::CloseRequested { .. } => {
+                            dlog!("window '{}' CloseRequested via RunEvent", label);
+                        }
+                        tauri::WindowEvent::Focused(focused) => {
+                            dlog!("window '{}' focused={}", label, focused);
+                        }
+                        _ => {}
+                    }
                 }
                 tauri::RunEvent::Exit => {
-                    eprintln!("[dispatch] app exiting");
+                    dlog!("RunEvent::Exit — app exiting");
                 }
                 _ => {}
             }
         });
+
+    // If we reach here, the event loop has ended
+    dlog!("event loop ended — run() returning");
 }

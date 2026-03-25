@@ -55,29 +55,29 @@ pub fn start_listener(
                             return;
                         }
 
-                        // Use event.name for layout-aware character detection
-                        if let Some(name) = event.name {
-                            if !name.is_empty() {
-                                buffer.push_str(&name);
+                        // Map key to character directly — do NOT use event.name as it calls
+                        // TSMGetInputSourceProperty which must run on the main thread and
+                        // causes EXC_BREAKPOINT (SIGTRAP) when called from a background thread.
+                        if let Some(ch) = key_to_char(key) {
+                            buffer.push(ch);
 
-                                // Trim buffer if too long — must respect char boundaries
-                                if buffer.len() > MAX_BUFFER_LEN {
-                                    let drain_to = buffer.len() - MAX_BUFFER_LEN;
-                                    let safe_boundary = buffer.ceil_char_boundary(drain_to);
-                                    buffer.drain(..safe_boundary);
-                                }
+                            // Trim buffer if too long — must respect char boundaries
+                            if buffer.len() > MAX_BUFFER_LEN {
+                                let drain_to = buffer.len() - MAX_BUFFER_LEN;
+                                let safe_boundary = buffer.ceil_char_boundary(drain_to);
+                                buffer.drain(..safe_boundary);
+                            }
 
-                                // Check for trigger match
-                                if let Some(entry) =
-                                    trigger_cache::match_trigger(&buffer, &cache)
-                                {
-                                    let trigger_len = entry.trigger.chars().count();
-                                    let _ = match_tx.send(TriggerMatch {
-                                        snippet_id: entry.snippet_id,
-                                        trigger_len,
-                                    });
-                                    buffer.clear();
-                                }
+                            // Check for trigger match
+                            if let Some(entry) =
+                                trigger_cache::match_trigger(&buffer, &cache)
+                            {
+                                let trigger_len = entry.trigger.chars().count();
+                                let _ = match_tx.send(TriggerMatch {
+                                    snippet_id: entry.snippet_id,
+                                    trigger_len,
+                                });
+                                buffer.clear();
                             }
                         }
                     }
@@ -130,4 +130,31 @@ fn is_modifier_key(key: rdev::Key) -> bool {
             | rdev::Key::CapsLock
             | rdev::Key::Function
     )
+}
+
+/// Map rdev::Key to a character without calling macOS TSM APIs.
+/// TSMGetInputSourceProperty must run on the main thread — calling it from
+/// the rdev background thread causes EXC_BREAKPOINT / SIGTRAP.
+/// This mapping covers US-QWERTY; non-US layouts will still match ASCII triggers.
+fn key_to_char(key: rdev::Key) -> Option<char> {
+    use rdev::Key::*;
+    match key {
+        KeyA => Some('a'), KeyB => Some('b'), KeyC => Some('c'), KeyD => Some('d'),
+        KeyE => Some('e'), KeyF => Some('f'), KeyG => Some('g'), KeyH => Some('h'),
+        KeyI => Some('i'), KeyJ => Some('j'), KeyK => Some('k'), KeyL => Some('l'),
+        KeyM => Some('m'), KeyN => Some('n'), KeyO => Some('o'), KeyP => Some('p'),
+        KeyQ => Some('q'), KeyR => Some('r'), KeyS => Some('s'), KeyT => Some('t'),
+        KeyU => Some('u'), KeyV => Some('v'), KeyW => Some('w'), KeyX => Some('x'),
+        KeyY => Some('y'), KeyZ => Some('z'),
+        Num0 => Some('0'), Num1 => Some('1'), Num2 => Some('2'), Num3 => Some('3'),
+        Num4 => Some('4'), Num5 => Some('5'), Num6 => Some('6'), Num7 => Some('7'),
+        Num8 => Some('8'), Num9 => Some('9'),
+        Space => Some(' '),
+        Minus => Some('-'), Equal => Some('='),
+        LeftBracket => Some('['), RightBracket => Some(']'),
+        BackSlash => Some('\\'), SemiColon => Some(';'), Quote => Some('\''),
+        Comma => Some(','), Dot => Some('.'), Slash => Some('/'),
+        BackQuote => Some('`'),
+        _ => None,
+    }
 }

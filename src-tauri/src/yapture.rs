@@ -11,6 +11,7 @@ pub struct YaptureConfig {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct YaptureConfigResponse {
     pub enabled: bool,
     pub api_url: String,
@@ -18,15 +19,15 @@ pub struct YaptureConfigResponse {
     pub has_token: bool,
 }
 
-/// Load config from DB settings + env var. Returns None if disabled or misconfigured.
-pub async fn load_config(pool: &sqlx::SqlitePool) -> Option<YaptureConfig> {
+/// Load config from DB settings + in-memory token. Returns None if disabled or misconfigured.
+pub async fn load_config(pool: &sqlx::SqlitePool, service_token: Option<String>) -> Option<YaptureConfig> {
     let enabled = crate::db::get_setting(pool, "yapture_enabled").await.ok()?;
     if enabled.as_deref() != Some("1") {
         return None;
     }
     let api_url = crate::db::get_setting(pool, "yapture_api_url").await.ok()??;
     let user_id = crate::db::get_setting(pool, "yapture_user_id").await.ok()??;
-    let service_token = std::env::var("YAPTURE_SERVICE_TOKEN").ok()?;
+    let service_token = service_token?;
     if api_url.is_empty() || user_id.is_empty() || service_token.is_empty() {
         return None;
     }
@@ -182,6 +183,7 @@ pub struct UserInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct YaptureConnectionStatus {
     pub connected: bool,
     pub user_name: Option<String>,
