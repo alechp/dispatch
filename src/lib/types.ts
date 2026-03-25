@@ -44,3 +44,23 @@ export interface ProjectSession {
   first_seen_at: string;
   last_seen_at: string;
 }
+
+export interface Snippet {
+  id: string;
+  trigger: string;
+  label: string | null;
+  body: string;
+  tags: string | null;
+  variables: string | null;
+  is_enabled: number;
+  use_count: number;
+  last_used_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SnippetVariable {
+  name: string;
+  type: "echo" | "date" | "clipboard" | "shell" | "form" | "choice" | "random";
+  params: Record<string, unknown>;
+}
