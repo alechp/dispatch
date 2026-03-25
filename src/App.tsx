@@ -10,6 +10,10 @@ import { useHotkeys } from "./hooks/useHotkeys";
 import { deleteNotification, focusTerminal } from "./lib/api";
 import { trackEvent } from "./lib/telemetry";
 import { TelemetryScreen } from "./components/TelemetryScreen";
+import { SessionTracker } from "./components/SessionTracker";
+import { SnippetManager } from "./components/SnippetManager";
+import { ExpanderPalette } from "./components/ExpanderPalette";
+import { listen } from "@tauri-apps/api/event";
 import type { Notification, QueryFilters } from "./lib/types";
 
 export type ActiveScreen = "feed" | "telemetry" | "sessions" | "expander";
@@ -20,6 +24,7 @@ export default function App() {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const [activeScreen, setActiveScreen] = useState<ActiveScreen>("feed");
+  const [showExpanderPalette, setShowExpanderPalette] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const queryFilters: QueryFilters = {
@@ -72,6 +77,19 @@ export default function App() {
   );
 
   useNotificationListener(handleNewNotification, refresh);
+
+  // Listen for global Cmd+Shift+E hotkey
+  useEffect(() => {
+    const unlisten = listen("show-expander-palette", () => {
+      setShowExpanderPalette(true);
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, []);
+
+  const handleExpand = useCallback((text: string) => {
+    navigator.clipboard.writeText(text);
+    setShowExpanderPalette(false);
+  }, []);
 
   // Reset selection when filter or search changes
   useEffect(() => {
@@ -171,9 +189,22 @@ export default function App() {
       {activeScreen === "telemetry" && (
         <TelemetryScreen onBack={() => setActiveScreen("feed")} />
       )}
-      {/* activeScreen === "sessions" — SessionsScreen not yet implemented */}
-      {/* activeScreen === "expander" — ExpanderScreen not yet implemented */}
+      {activeScreen === "sessions" && (
+        <SessionTracker
+          onBack={() => setActiveScreen("feed")}
+          onFocusTerminal={handleFocusTerminal}
+        />
+      )}
+      {activeScreen === "expander" && (
+        <SnippetManager onBack={() => setActiveScreen("feed")} />
+      )}
       {showHelp && <HotkeyHelp onClose={() => setShowHelp(false)} />}
+      {showExpanderPalette && (
+        <ExpanderPalette
+          onClose={() => setShowExpanderPalette(false)}
+          onExpand={handleExpand}
+        />
+      )}
     </div>
   );
 }
