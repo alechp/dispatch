@@ -43,6 +43,8 @@ export interface ProjectSession {
   error_count: number;
   first_seen_at: string;
   last_seen_at: string;
+  directory: string | null;
+  git_remote: string | null;
 }
 
 export interface Snippet {

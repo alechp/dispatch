@@ -264,6 +264,7 @@ pub fn run() {
             commands::get_telemetry,
             commands::get_telemetry_summary,
             commands::get_project_sessions,
+            commands::update_project_metadata,
             commands::list_snippets,
             commands::create_snippet,
             commands::update_snippet,

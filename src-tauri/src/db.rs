@@ -19,6 +19,9 @@ pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::raw_sql(include_str!("../migrations/005_live_expansion.sql"))
         .execute(pool)
         .await?;
+    sqlx::raw_sql(include_str!("../migrations/006_project_metadata.sql"))
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -289,9 +292,18 @@ pub async fn upsert_project_session(
     let project = notification.project.as_deref().unwrap_or(&notification.source);
     let error_inc: i32 = if notification.event_type == "error" { 1 } else { 0 };
 
+    // Parse metadata for directory/git_remote
+    let (directory, git_remote) = notification.metadata.as_deref()
+        .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
+        .map(|v| (
+            v.get("directory").and_then(|d| d.as_str()).map(String::from),
+            v.get("git_remote").and_then(|g| g.as_str()).map(String::from),
+        ))
+        .unwrap_or((None, None));
+
     sqlx::query(
-        "INSERT INTO project_sessions (project, source, last_event_type, last_title, last_body, last_metadata, last_tmux_session, last_tmux_window, last_tmux_pane, notification_count, unread_count, error_count, first_seen_at, last_seen_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?)
+        "INSERT INTO project_sessions (project, source, last_event_type, last_title, last_body, last_metadata, last_tmux_session, last_tmux_window, last_tmux_pane, notification_count, unread_count, error_count, first_seen_at, last_seen_at, directory, git_remote)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?)
          ON CONFLICT(project, source) DO UPDATE SET
            last_event_type = excluded.last_event_type,
            last_title = excluded.last_title,
@@ -303,7 +315,9 @@ pub async fn upsert_project_session(
            notification_count = project_sessions.notification_count + 1,
            unread_count = project_sessions.unread_count + 1,
            error_count = project_sessions.error_count + excluded.error_count,
-           last_seen_at = excluded.last_seen_at"
+           last_seen_at = excluded.last_seen_at,
+           directory = COALESCE(project_sessions.directory, excluded.directory),
+           git_remote = COALESCE(project_sessions.git_remote, excluded.git_remote)"
     )
     .bind(project)
     .bind(&notification.source)
@@ -317,6 +331,8 @@ pub async fn upsert_project_session(
     .bind(error_inc)
     .bind(&notification.created_at)
     .bind(&notification.created_at)
+    .bind(&directory)
+    .bind(&git_remote)
     .execute(pool)
     .await?;
     Ok(())
@@ -348,17 +364,17 @@ pub async fn get_project_sessions(
     pool: &SqlitePool,
     search: Option<&str>,
 ) -> Result<Vec<crate::models::ProjectSession>, sqlx::Error> {
-    let rows: Vec<(String, String, String, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, i64, i64, i64, String, String)> = if let Some(s) = search {
+    let rows: Vec<(String, String, String, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, i64, i64, i64, String, String, Option<String>, Option<String>)> = if let Some(s) = search {
         let pattern = format!("%{}%", s);
         sqlx::query_as(
-            "SELECT project, source, last_event_type, last_title, last_body, last_metadata, last_tmux_session, last_tmux_window, last_tmux_pane, notification_count, unread_count, error_count, first_seen_at, last_seen_at FROM project_sessions WHERE project LIKE ? ORDER BY last_seen_at DESC"
+            "SELECT project, source, last_event_type, last_title, last_body, last_metadata, last_tmux_session, last_tmux_window, last_tmux_pane, notification_count, unread_count, error_count, first_seen_at, last_seen_at, directory, git_remote FROM project_sessions WHERE project LIKE ? ORDER BY last_seen_at DESC"
         )
         .bind(pattern)
         .fetch_all(pool)
         .await?
     } else {
         sqlx::query_as(
-            "SELECT project, source, last_event_type, last_title, last_body, last_metadata, last_tmux_session, last_tmux_window, last_tmux_pane, notification_count, unread_count, error_count, first_seen_at, last_seen_at FROM project_sessions ORDER BY last_seen_at DESC"
+            "SELECT project, source, last_event_type, last_title, last_body, last_metadata, last_tmux_session, last_tmux_window, last_tmux_pane, notification_count, unread_count, error_count, first_seen_at, last_seen_at, directory, git_remote FROM project_sessions ORDER BY last_seen_at DESC"
         )
         .fetch_all(pool)
         .await?
@@ -379,7 +395,45 @@ pub async fn get_project_sessions(
         error_count: r.11,
         first_seen_at: r.12,
         last_seen_at: r.13,
+        directory: r.14,
+        git_remote: r.15,
     }).collect())
+}
+
+pub async fn update_project_metadata(
+    pool: &SqlitePool,
+    project: &str,
+    source: &str,
+    directory: Option<&str>,
+    git_remote: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    let mut sets: Vec<String> = Vec::new();
+    let mut args: Vec<String> = Vec::new();
+
+    if let Some(d) = directory {
+        sets.push("directory = ?".to_string());
+        args.push(d.to_string());
+    }
+    if let Some(g) = git_remote {
+        sets.push("git_remote = ?".to_string());
+        args.push(g.to_string());
+    }
+
+    if sets.is_empty() {
+        return Ok(());
+    }
+
+    let sql = format!(
+        "UPDATE project_sessions SET {} WHERE project = ? AND source = ?",
+        sets.join(", ")
+    );
+    let mut query = sqlx::query(&sql);
+    for arg in &args {
+        query = query.bind(arg);
+    }
+    query = query.bind(project).bind(source);
+    query.execute(pool).await?;
+    Ok(())
 }
 
 pub async fn get_notification_by_id(

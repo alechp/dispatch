@@ -204,6 +204,25 @@ pub async fn get_project_sessions(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn update_project_metadata(
+    state: State<'_, Arc<AppState>>,
+    project: String,
+    source: String,
+    directory: Option<String>,
+    git_remote: Option<String>,
+) -> Result<(), String> {
+    db::update_project_metadata(
+        &state.db,
+        &project,
+        &source,
+        directory.as_deref(),
+        git_remote.as_deref(),
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
 // --- Text Expander commands ---
 
 #[tauri::command]

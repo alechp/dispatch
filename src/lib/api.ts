@@ -34,3 +34,17 @@ export async function focusTerminal(session: string, window?: string, pane?: str
 export async function getProjectSessions(search?: string): Promise<ProjectSession[]> {
   return invoke("get_project_sessions", { search: search ?? null });
 }
+
+export async function updateProjectMetadata(
+  project: string,
+  source: string,
+  directory?: string,
+  gitRemote?: string,
+): Promise<void> {
+  return invoke("update_project_metadata", {
+    project,
+    source,
+    directory: directory ?? null,
+    gitRemote: gitRemote ?? null,
+  });
+}

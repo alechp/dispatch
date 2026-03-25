@@ -87,6 +87,8 @@ pub struct ProjectSession {
     pub error_count: i64,
     pub first_seen_at: String,
     pub last_seen_at: String,
+    pub directory: Option<String>,
+    pub git_remote: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
