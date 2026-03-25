@@ -12,6 +12,7 @@ pub struct AppState {
     pub tx: broadcast::Sender<Notification>,
     pub live_expansion_enabled: Arc<AtomicBool>,
     pub trigger_cache: Arc<RwLock<Vec<TriggerEntry>>>,
+    pub oauth_pending: std::sync::Mutex<Option<crate::yapture::OAuthState>>,
 }
 
 impl AppState {
@@ -22,6 +23,7 @@ impl AppState {
             tx,
             live_expansion_enabled: Arc::new(AtomicBool::new(false)),
             trigger_cache: Arc::new(RwLock::new(Vec::new())),
+            oauth_pending: std::sync::Mutex::new(None),
         }
     }
 }

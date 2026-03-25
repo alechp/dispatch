@@ -9,18 +9,20 @@ mod state;
 mod text_injector;
 mod trigger_cache;
 mod tray;
+mod yapture;
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use sqlx::sqlite::SqlitePoolOptions;
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Listener, Manager};
 
 use crate::state::AppState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let app_handle = app.handle().clone();
@@ -199,6 +201,166 @@ pub fn run() {
             // Setup system tray
             tray::setup_tray(app.handle())?;
 
+            // Deep link handler for OAuth callback
+            {
+                let deep_link_state = state.clone();
+                let deep_link_handle = app.handle().clone();
+                app.listen("deep-link://new-url", move |event| {
+                    let urls: Vec<String> = match serde_json::from_str(event.payload()) {
+                        Ok(u) => u,
+                        Err(e) => {
+                            eprintln!("[oauth] failed to parse deep link payload: {}", e);
+                            return;
+                        }
+                    };
+
+                    let url_str = match urls.first() {
+                        Some(u) => u.clone(),
+                        None => return,
+                    };
+
+                    if !url_str.starts_with("dispatch://oauth/callback") {
+                        return;
+                    }
+
+                    eprintln!("[oauth] received callback: {}", url_str);
+
+                    // Parse URL params
+                    let url = match url::Url::parse(&url_str) {
+                        Ok(u) => u,
+                        Err(e) => {
+                            eprintln!("[oauth] failed to parse URL: {}", e);
+                            return;
+                        }
+                    };
+
+                    let params: std::collections::HashMap<String, String> = url
+                        .query_pairs()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect();
+
+                    let code = match params.get("code") {
+                        Some(c) => c.clone(),
+                        None => {
+                            eprintln!("[oauth] no code in callback");
+                            return;
+                        }
+                    };
+
+                    let callback_state = match params.get("state") {
+                        Some(s) => s.clone(),
+                        None => {
+                            eprintln!("[oauth] no state in callback");
+                            return;
+                        }
+                    };
+
+                    // Validate state and get verifier
+                    let oauth_state = {
+                        let mut pending = deep_link_state.oauth_pending.lock().unwrap();
+                        match pending.take() {
+                            Some(os) if os.state == callback_state => os,
+                            Some(_) => {
+                                eprintln!("[oauth] state mismatch");
+                                return;
+                            }
+                            None => {
+                                eprintln!("[oauth] no pending OAuth flow");
+                                return;
+                            }
+                        }
+                    };
+
+                    let state_for_async = deep_link_state.clone();
+                    let handle_for_async = deep_link_handle.clone();
+
+                    tauri::async_runtime::spawn(async move {
+                        let api_url = crate::db::get_setting(
+                            &state_for_async.db,
+                            "yapture_api_url",
+                        )
+                        .await
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| "https://api.yapture.app".to_string());
+
+                        // Exchange code for tokens
+                        let tokens =
+                            match yapture::exchange_code(&api_url, &code, &oauth_state).await {
+                                Ok(t) => t,
+                                Err(e) => {
+                                    eprintln!("[oauth] token exchange failed: {}", e);
+                                    return;
+                                }
+                            };
+
+                        eprintln!("[oauth] tokens received");
+
+                        // Store tokens (env for now, keychain later)
+                        unsafe {
+                            std::env::set_var("YAPTURE_ACCESS_TOKEN", &tokens.access_token);
+                            if let Some(ref rt) = tokens.refresh_token {
+                                std::env::set_var("YAPTURE_REFRESH_TOKEN", rt);
+                            }
+                            // Also set as service token for API calls
+                            std::env::set_var("YAPTURE_SERVICE_TOKEN", &tokens.access_token);
+                        }
+
+                        // Fetch user info
+                        match yapture::fetch_userinfo(&api_url, &tokens.access_token).await {
+                            Ok(info) => {
+                                eprintln!("[oauth] user: {:?}", info);
+                                let _ = crate::db::set_setting(
+                                    &state_for_async.db,
+                                    "yapture_user_id",
+                                    &info.sub,
+                                )
+                                .await;
+                                if let Some(name) = &info.name {
+                                    let _ = crate::db::set_setting(
+                                        &state_for_async.db,
+                                        "yapture_user_name",
+                                        name,
+                                    )
+                                    .await;
+                                }
+                                if let Some(email) = &info.email {
+                                    let _ = crate::db::set_setting(
+                                        &state_for_async.db,
+                                        "yapture_user_email",
+                                        email,
+                                    )
+                                    .await;
+                                }
+                                let _ = crate::db::set_setting(
+                                    &state_for_async.db,
+                                    "yapture_enabled",
+                                    "1",
+                                )
+                                .await;
+
+                                // Emit event to frontend
+                                if let Some(window) =
+                                    handle_for_async.get_webview_window("main")
+                                {
+                                    let _ = window.emit(
+                                        "yapture-connected",
+                                        &yapture::YaptureConnectionStatus {
+                                            connected: true,
+                                            user_name: info.name,
+                                            user_email: info.email,
+                                        },
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("[oauth] userinfo fetch failed: {}", e);
+                            }
+                        }
+                    });
+                });
+            }
+
             // Global hotkeys: Cmd+Shift+D to toggle window, Cmd+Shift+E for expander
             use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
             let shortcut: tauri_plugin_global_shortcut::Shortcut =
@@ -276,6 +438,12 @@ pub fn run() {
             commands::set_live_expansion_enabled,
             commands::check_accessibility_permission,
             commands::request_accessibility_permission,
+            commands::get_yapture_config,
+            commands::set_yapture_config,
+            commands::test_yapture_connection,
+            commands::yapture_start_oauth,
+            commands::yapture_disconnect,
+            commands::get_yapture_connection_status,
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri application")
