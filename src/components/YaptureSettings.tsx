@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-opener";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   getYaptureConfig,
   setYaptureConfig,
@@ -57,7 +57,7 @@ export function YaptureSettings({ onBack }: YaptureSettingsProps) {
     setConnecting(true);
     try {
       const url = await yaptureStartOAuth();
-      await open(url);
+      await openUrl(url);
     } catch (e) {
       console.error("OAuth start failed:", e);
       setConnecting(false);
