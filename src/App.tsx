@@ -13,10 +13,11 @@ import { TelemetryScreen } from "./components/TelemetryScreen";
 import { SessionTracker } from "./components/SessionTracker";
 import { SnippetManager } from "./components/SnippetManager";
 import { ExpanderPalette } from "./components/ExpanderPalette";
+import { YaptureSettings } from "./components/YaptureSettings";
 import { listen } from "@tauri-apps/api/event";
 import type { Notification, QueryFilters } from "./lib/types";
 
-export type ActiveScreen = "feed" | "telemetry" | "sessions" | "expander";
+export type ActiveScreen = "feed" | "telemetry" | "sessions" | "expander" | "settings";
 
 export default function App() {
   const [filter, setFilter] = useState<"all" | "unread" | "read">("all");
@@ -197,6 +198,9 @@ export default function App() {
       )}
       {activeScreen === "expander" && (
         <SnippetManager onBack={() => setActiveScreen("feed")} />
+      )}
+      {activeScreen === "settings" && (
+        <YaptureSettings onBack={() => setActiveScreen("feed")} />
       )}
       {showHelp && <HotkeyHelp onClose={() => setShowHelp(false)} />}
       {showExpanderPalette && (

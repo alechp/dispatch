@@ -19,6 +19,12 @@ pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::raw_sql(include_str!("../migrations/005_live_expansion.sql"))
         .execute(pool)
         .await?;
+    sqlx::raw_sql(include_str!("../migrations/007_yapture_settings.sql"))
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(include_str!("../migrations/008_yapture_oauth.sql"))
+        .execute(pool)
+        .await?;
     Ok(())
 }
 

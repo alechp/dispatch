@@ -11,6 +11,7 @@ use crate::models;
 use crate::models::{NotificationResponse, QueryParams};
 use crate::state::AppState;
 use crate::trigger_cache;
+use crate::yapture;
 
 #[tauri::command]
 pub async fn get_notifications(
@@ -365,4 +366,149 @@ pub async fn check_accessibility_permission() -> Result<bool, String> {
 #[tauri::command]
 pub async fn request_accessibility_permission() -> Result<bool, String> {
     Ok(macos_accessibility::request_permission())
+}
+
+// --- Yapture Integration commands ---
+
+#[tauri::command]
+pub async fn get_yapture_config(
+    state: State<'_, Arc<AppState>>,
+) -> Result<yapture::YaptureConfigResponse, String> {
+    let enabled = db::get_setting(&state.db, "yapture_enabled")
+        .await
+        .map_err(|e| e.to_string())?
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    let api_url = db::get_setting(&state.db, "yapture_api_url")
+        .await
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|| "https://api.yapture.app".to_string());
+    let user_id = db::get_setting(&state.db, "yapture_user_id")
+        .await
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let has_token = std::env::var("YAPTURE_SERVICE_TOKEN")
+        .map(|t| !t.is_empty())
+        .unwrap_or(false);
+
+    Ok(yapture::YaptureConfigResponse {
+        enabled,
+        api_url,
+        user_id,
+        has_token,
+    })
+}
+
+#[tauri::command]
+pub async fn set_yapture_config(
+    state: State<'_, Arc<AppState>>,
+    enabled: Option<bool>,
+    api_url: Option<String>,
+    user_id: Option<String>,
+    service_token: Option<String>,
+) -> Result<(), String> {
+    if let Some(e) = enabled {
+        db::set_setting(&state.db, "yapture_enabled", if e { "1" } else { "0" })
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    if let Some(url) = api_url {
+        db::set_setting(&state.db, "yapture_api_url", &url)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    if let Some(uid) = user_id {
+        db::set_setting(&state.db, "yapture_user_id", &uid)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    if let Some(token) = service_token {
+        // For now, store as env var (in-memory only). Future: keychain.
+        unsafe { std::env::set_var("YAPTURE_SERVICE_TOKEN", &token) };
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn test_yapture_connection(
+    state: State<'_, Arc<AppState>>,
+) -> Result<bool, String> {
+    let api_url = db::get_setting(&state.db, "yapture_api_url")
+        .await
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|| "https://api.yapture.app".to_string());
+    let service_token = std::env::var("YAPTURE_SERVICE_TOKEN").unwrap_or_default();
+    Ok(yapture::test_connection(&api_url, &service_token).await)
+}
+
+// --- OAuth commands ---
+
+#[tauri::command]
+pub async fn yapture_start_oauth(
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    let api_url = db::get_setting(&state.db, "yapture_api_url")
+        .await
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|| "https://api.yapture.app".to_string());
+
+    let (auth_url, oauth_state) = yapture::start_oauth_flow(&api_url);
+
+    // Store pending OAuth state
+    let mut pending = state.oauth_pending.lock().map_err(|e| e.to_string())?;
+    *pending = Some(oauth_state);
+
+    Ok(auth_url)
+}
+
+#[tauri::command]
+pub async fn yapture_disconnect(
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    db::set_setting(&state.db, "yapture_enabled", "0")
+        .await
+        .map_err(|e| e.to_string())?;
+    db::set_setting(&state.db, "yapture_user_id", "")
+        .await
+        .map_err(|e| e.to_string())?;
+    db::set_setting(&state.db, "yapture_user_name", "")
+        .await
+        .map_err(|e| e.to_string())?;
+    db::set_setting(&state.db, "yapture_user_email", "")
+        .await
+        .map_err(|e| e.to_string())?;
+    // Clear tokens
+    unsafe {
+        std::env::remove_var("YAPTURE_SERVICE_TOKEN");
+        std::env::remove_var("YAPTURE_ACCESS_TOKEN");
+        std::env::remove_var("YAPTURE_REFRESH_TOKEN");
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_yapture_connection_status(
+    state: State<'_, Arc<AppState>>,
+) -> Result<yapture::YaptureConnectionStatus, String> {
+    let enabled = db::get_setting(&state.db, "yapture_enabled")
+        .await
+        .map_err(|e| e.to_string())?
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    let user_name = db::get_setting(&state.db, "yapture_user_name")
+        .await
+        .map_err(|e| e.to_string())?
+        .filter(|s| !s.is_empty());
+    let user_email = db::get_setting(&state.db, "yapture_user_email")
+        .await
+        .map_err(|e| e.to_string())?
+        .filter(|s| !s.is_empty());
+
+    let connected = enabled && user_name.is_some();
+
+    Ok(yapture::YaptureConnectionStatus {
+        connected,
+        user_name,
+        user_email,
+    })
 }

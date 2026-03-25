@@ -67,6 +67,15 @@ async fn create_notification(
         let _ = crate::db::upsert_project_session(&session_pool, &session_notification).await;
     });
 
+    // Push to Yapture (fire-and-forget)
+    let yapture_pool = state.db.clone();
+    let yapture_notification = notification.clone();
+    tokio::spawn(async move {
+        if let Some(config) = crate::yapture::load_config(&yapture_pool).await {
+            crate::yapture::push_notification(&config, &yapture_notification).await;
+        }
+    });
+
     Ok((StatusCode::CREATED, Json(notification)))
 }
 
