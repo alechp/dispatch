@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useSnippets } from "../hooks/useSnippets";
 import {
   createSnippet,
@@ -7,6 +7,12 @@ import {
   importSnippets,
   exportSnippets,
 } from "../lib/snippets";
+import {
+  getLiveExpansionEnabled,
+  setLiveExpansionEnabled,
+  checkAccessibilityPermission,
+  requestAccessibilityPermission,
+} from "../lib/liveExpansion";
 import type { Snippet, SnippetVariable } from "../lib/types";
 
 interface SnippetManagerProps {
@@ -136,6 +142,9 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
           +
         </button>
       </div>
+
+      {/* Live Expansion Toggle */}
+      <LiveExpansionToggle />
 
       {/* Snippet list */}
       <div className="flex-1 overflow-y-auto">
@@ -876,6 +885,73 @@ function ImportModal({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// LiveExpansionToggle
+// ---------------------------------------------------------------------------
+
+function LiveExpansionToggle() {
+  const [enabled, setEnabled] = useState(false);
+  const [hasPermission, setHasPermission] = useState(true);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [isEnabled, hasPerm] = await Promise.all([
+          getLiveExpansionEnabled(),
+          checkAccessibilityPermission(),
+        ]);
+        setEnabled(isEnabled);
+        setHasPermission(hasPerm);
+      } catch {
+        // ignore
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const handleToggle = useCallback(async () => {
+    if (!hasPermission) {
+      const granted = await requestAccessibilityPermission();
+      setHasPermission(granted);
+      if (!granted) return;
+    }
+    const newValue = !enabled;
+    setEnabled(newValue);
+    await setLiveExpansionEnabled(newValue);
+  }, [enabled, hasPermission]);
+
+  if (loading) return null;
+
+  return (
+    <div className="flex items-center justify-between px-4 py-2 border-b border-border-subtle bg-surface-raised/50">
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-medium text-text-secondary">
+          Live Expansion
+        </span>
+        {!hasPermission && (
+          <span className="text-[10px] text-warning">
+            Needs Input Monitoring permission
+          </span>
+        )}
+      </div>
+      <button
+        onClick={handleToggle}
+        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+          enabled ? "bg-accent" : "bg-surface-overlay border border-border-subtle"
+        }`}
+      >
+        <span
+          className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${
+            enabled ? "translate-x-4" : "translate-x-0.5"
+          }`}
+        />
+      </button>
     </div>
   );
 }

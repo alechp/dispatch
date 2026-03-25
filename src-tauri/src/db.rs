@@ -16,6 +16,9 @@ pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::raw_sql(include_str!("../migrations/004_snippets.sql"))
         .execute(pool)
         .await?;
+    sqlx::raw_sql(include_str!("../migrations/005_live_expansion.sql"))
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -528,6 +531,28 @@ pub async fn increment_snippet_use(pool: &SqlitePool, id: &str) -> Result<(), sq
     let now = chrono::Utc::now().to_rfc3339();
     sqlx::query("UPDATE snippets SET use_count = use_count + 1, last_used_at = ? WHERE id = ?")
         .bind(&now).bind(id).execute(pool).await?;
+    Ok(())
+}
+
+// --- Settings functions ---
+
+pub async fn get_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>, sqlx::Error> {
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT value FROM settings WHERE key = ?")
+            .bind(key)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.map(|r| r.0))
+}
+
+pub async fn set_setting(pool: &SqlitePool, key: &str, value: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(key)
+    .bind(value)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 

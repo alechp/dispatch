@@ -1,13 +1,16 @@
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use tauri::State;
 
 use crate::db;
 use crate::expander;
+use crate::macos_accessibility;
 use crate::models;
 use crate::models::{NotificationResponse, QueryParams};
 use crate::state::AppState;
+use crate::trigger_cache;
 
 #[tauri::command]
 pub async fn get_notifications(
@@ -223,9 +226,11 @@ pub async fn create_snippet(
     tags: Option<String>,
     variables: Option<String>,
 ) -> Result<models::Snippet, String> {
-    db::create_snippet(&state.db, &trigger, label.as_deref(), &body, tags.as_deref(), variables.as_deref())
+    let result = db::create_snippet(&state.db, &trigger, label.as_deref(), &body, tags.as_deref(), variables.as_deref())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -239,9 +244,11 @@ pub async fn update_snippet(
     variables: Option<String>,
     is_enabled: Option<i32>,
 ) -> Result<models::Snippet, String> {
-    db::update_snippet(&state.db, &id, trigger.as_deref(), label.as_deref(), body.as_deref(), tags.as_deref(), variables.as_deref(), is_enabled)
+    let result = db::update_snippet(&state.db, &id, trigger.as_deref(), label.as_deref(), body.as_deref(), tags.as_deref(), variables.as_deref(), is_enabled)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -249,9 +256,11 @@ pub async fn delete_snippet(
     state: State<'_, Arc<AppState>>,
     id: String,
 ) -> Result<bool, String> {
-    db::delete_snippet(&state.db, &id)
+    let result = db::delete_snippet(&state.db, &id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -303,6 +312,7 @@ pub async fn import_snippets(
             count += 1;
         }
     }
+    let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
     Ok(count)
 }
 
@@ -313,4 +323,46 @@ pub async fn export_snippets(
     db::list_all_snippets(&state.db)
         .await
         .map_err(|e| e.to_string())
+}
+
+// --- Live Expansion commands ---
+
+#[tauri::command]
+pub async fn get_live_expansion_enabled(
+    state: State<'_, Arc<AppState>>,
+) -> Result<bool, String> {
+    Ok(state.live_expansion_enabled.load(Ordering::Relaxed))
+}
+
+#[tauri::command]
+pub async fn set_live_expansion_enabled(
+    state: State<'_, Arc<AppState>>,
+    enabled: bool,
+) -> Result<(), String> {
+    state
+        .live_expansion_enabled
+        .store(enabled, Ordering::Relaxed);
+
+    // Persist to DB
+    let value = if enabled { "1" } else { "0" };
+    db::set_setting(&state.db, "live_expansion_enabled", value)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Refresh trigger cache when enabling
+    if enabled {
+        let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn check_accessibility_permission() -> Result<bool, String> {
+    Ok(macos_accessibility::check_permission())
+}
+
+#[tauri::command]
+pub async fn request_accessibility_permission() -> Result<bool, String> {
+    Ok(macos_accessibility::request_permission())
 }

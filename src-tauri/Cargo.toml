@@ -31,3 +31,7 @@ tower-http = { version = "0.5", features = ["cors"] }
 futures = "0.3"
 tauri-plugin-global-shortcut = "2"
 arboard = "3"
+rdev = "0.5"
+enigo = "0.2"
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
