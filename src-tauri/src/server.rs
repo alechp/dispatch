@@ -44,6 +44,41 @@ async fn create_notification(
     // Broadcast to all listeners (WebSocket + Tauri events)
     let _ = state.tx.send(notification.clone());
 
+    // Record telemetry (fire-and-forget)
+    let telem_pool = state.db.clone();
+    let telem_id = notification.id.clone();
+    let telem_source = req.source.clone();
+    let telem_project = req.project.clone();
+    tokio::spawn(async move {
+        let _ = crate::db::record_telemetry(
+            &telem_pool,
+            "notification_received",
+            Some(&telem_id),
+            telem_source.as_deref(),
+            telem_project.as_deref(),
+            None,
+        ).await;
+    });
+
+    // Upsert project session (fire-and-forget)
+    let session_pool = state.db.clone();
+    let session_notification = notification.clone();
+    tokio::spawn(async move {
+        let _ = crate::db::upsert_project_session(&session_pool, &session_notification).await;
+    });
+
+    // Push to Yapture (fire-and-forget)
+    let yapture_pool = state.db.clone();
+    let yapture_notification = notification.clone();
+    let yapture_token = state.yapture_tokens.lock()
+        .ok()
+        .and_then(|t| t.service_token.clone());
+    tokio::spawn(async move {
+        if let Some(config) = crate::yapture::load_config(&yapture_pool, yapture_token).await {
+            crate::yapture::push_notification(&config, &yapture_notification).await;
+        }
+    });
+
     Ok((StatusCode::CREATED, Json(notification)))
 }
 

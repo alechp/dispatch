@@ -1,10 +1,13 @@
+import { useEffect, useRef } from "react";
 import type { Notification } from "../lib/types";
 
 interface NotificationCardProps {
   notification: Notification;
   onMarkRead: (id: string) => void;
   onDelete: (id: string) => void;
-  onFocusTerminal: (session: string, window: string | null, pane: string | null) => void;
+  onFocusTerminal: (id: string, session: string, window: string | null, pane: string | null) => void;
+  isSelected?: boolean;
+  index: number;
 }
 
 function timeAgo(dateStr: string): string {
@@ -39,24 +42,39 @@ export function NotificationCard({
   onMarkRead,
   onDelete,
   onFocusTerminal,
+  isSelected = false,
+  index,
 }: NotificationCardProps) {
   const isUnread = n.is_read === 0;
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (isSelected && cardRef.current) {
+      cardRef.current.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [isSelected]);
 
   return (
     <div
+      ref={cardRef}
       className={`group relative px-4 py-3 border-b border-border-subtle transition-colors ${
-        isUnread ? "bg-surface-raised" : "bg-surface"
+        isSelected
+          ? "bg-accent/10 border-l-2 border-l-accent"
+          : isUnread
+            ? "bg-surface-raised"
+            : "bg-surface"
       } hover:bg-surface-overlay`}
       onClick={() => isUnread && onMarkRead(n.id)}
     >
       <div className="flex items-start gap-3">
-        {/* Unread indicator */}
-        <div className="pt-1.5 shrink-0">
+        {/* Index + unread indicator */}
+        <div className="flex flex-col items-center shrink-0 pt-0.5" style={{ minWidth: 16 }}>
           <div
             className={`w-2 h-2 rounded-full ${
               isUnread ? eventColor(n.event_type) : "bg-transparent"
             }`}
           />
+          <span className="text-[9px] text-text-tertiary mt-0.5 leading-none">{index + 1}</span>
         </div>
 
         <div className="flex-1 min-w-0">
@@ -128,7 +146,7 @@ export function NotificationCard({
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                onFocusTerminal(n.tmux_session!, n.tmux_window, n.tmux_pane);
+                onFocusTerminal(n.id, n.tmux_session!, n.tmux_window, n.tmux_pane);
               }}
               className="opacity-0 group-hover:opacity-100 p-1 text-text-tertiary hover:text-accent rounded transition-all"
               title="Focus terminal"

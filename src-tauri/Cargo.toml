@@ -29,4 +29,16 @@ uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 tower-http = { version = "0.5", features = ["cors"] }
 futures = "0.3"
-
+tauri-plugin-global-shortcut = "2"
+arboard = "3"
+rdev = "0.5"
+enigo = "0.2"
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+tauri-plugin-deep-link = "2"
+sha2 = "0.10"
+base64 = "0.22"
+rand = "0.8"
+url = "2"
+urlencoding = "2"

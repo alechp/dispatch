@@ -27,3 +27,42 @@ export interface QueryFilters {
   limit?: number;
   offset?: number;
 }
+
+export interface ProjectSession {
+  project: string;
+  source: string;
+  last_event_type: string;
+  last_title: string;
+  last_body: string | null;
+  last_metadata: string | null;
+  last_tmux_session: string | null;
+  last_tmux_window: string | null;
+  last_tmux_pane: string | null;
+  notification_count: number;
+  unread_count: number;
+  error_count: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  directory: string | null;
+  git_remote: string | null;
+}
+
+export interface Snippet {
+  id: string;
+  trigger: string;
+  label: string | null;
+  body: string;
+  tags: string | null;
+  variables: string | null;
+  is_enabled: number;
+  use_count: number;
+  last_used_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SnippetVariable {
+  name: string;
+  type: "echo" | "date" | "clipboard" | "shell" | "form" | "choice" | "random";
+  params: Record<string, unknown>;
+}

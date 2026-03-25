@@ -7,7 +7,8 @@ interface NotificationFeedProps {
   loading: boolean;
   onMarkRead: (id: string) => void;
   onDelete: (id: string) => void;
-  onFocusTerminal: (session: string, window: string | null, pane: string | null) => void;
+  onFocusTerminal: (id: string, session: string, window: string | null, pane: string | null) => void;
+  selectedIndex: number | null;
 }
 
 export function NotificationFeed({
@@ -16,6 +17,7 @@ export function NotificationFeed({
   onMarkRead,
   onDelete,
   onFocusTerminal,
+  selectedIndex,
 }: NotificationFeedProps) {
   if (loading) {
     return (
@@ -31,13 +33,15 @@ export function NotificationFeed({
 
   return (
     <div className="overflow-y-auto flex-1">
-      {notifications.map((n) => (
+      {notifications.map((n, i) => (
         <NotificationCard
           key={n.id}
           notification={n}
           onMarkRead={onMarkRead}
           onDelete={onDelete}
           onFocusTerminal={onFocusTerminal}
+          isSelected={i === selectedIndex}
+          index={i}
         />
       ))}
     </div>
