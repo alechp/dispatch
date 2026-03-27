@@ -58,3 +58,55 @@ export async function importSnippets(json: string): Promise<number> {
 export async function exportSnippets(): Promise<Snippet[]> {
   return invoke("export_snippets");
 }
+
+// --- Expander V2: recents, favorites, prefix, sources ---
+
+export async function listRecentSnippets(limit?: number): Promise<Snippet[]> {
+  return invoke("list_recent_snippets", { limit: limit ?? 5 });
+}
+
+export async function listFavoriteSnippets(): Promise<Snippet[]> {
+  return invoke("list_favorite_snippets");
+}
+
+export async function toggleSnippetFavorite(id: string): Promise<boolean> {
+  return invoke("toggle_snippet_favorite", { id });
+}
+
+export async function getExpandPrefix(): Promise<string> {
+  return invoke("get_expand_prefix");
+}
+
+export async function setExpandPrefix(prefix: string): Promise<void> {
+  return invoke("set_expand_prefix", { prefix });
+}
+
+export async function addSnippetSource(name: string, path: string, isFolder: boolean): Promise<SnippetSource> {
+  return invoke("add_snippet_source", { name, path, isFolder });
+}
+
+export async function listSnippetSources(): Promise<SnippetSource[]> {
+  return invoke("list_snippet_sources");
+}
+
+export async function updateSnippetSource(id: string, data: { name?: string; isEnabled?: boolean; autoReload?: boolean }): Promise<void> {
+  return invoke("update_snippet_source", { id, name: data.name ?? null, isEnabled: data.isEnabled ?? null, autoReload: data.autoReload ?? null });
+}
+
+export async function removeSnippetSource(id: string): Promise<void> {
+  return invoke("remove_snippet_source", { id });
+}
+
+export async function syncSnippetSource(id: string): Promise<SyncResult> {
+  return invoke("sync_snippet_source", { id });
+}
+
+export async function syncAllSources(): Promise<SyncResult> {
+  return invoke("sync_all_sources");
+}
+
+export async function createBoilerplateConfig(folderPath: string, packageName: string): Promise<SnippetSource> {
+  return invoke("create_boilerplate_config", { folderPath, packageName });
+}
+
+import type { SnippetSource, SyncResult } from "./types";

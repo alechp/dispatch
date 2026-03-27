@@ -7,7 +7,17 @@ import {
   deleteSnippet,
   importSnippets,
   exportSnippets,
+  toggleSnippetFavorite,
+  getExpandPrefix,
+  setExpandPrefix as setExpandPrefixApi,
+  listSnippetSources,
+  addSnippetSource,
+  removeSnippetSource,
+  syncSnippetSource,
+  updateSnippetSource,
+  createBoilerplateConfig,
 } from "../lib/snippets";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   getLiveExpansionEnabled,
   setLiveExpansionEnabled,
@@ -18,13 +28,13 @@ import {
   copyToClipboard,
 } from "../lib/liveExpansion";
 import type { ExpansionDiagnostics } from "../lib/liveExpansion";
-import type { Snippet, SnippetVariable } from "../lib/types";
+import type { Snippet, SnippetVariable, SnippetSource } from "../lib/types";
 
 interface SnippetManagerProps {
   onBack: () => void;
 }
 
-type ViewMode = "list" | "edit";
+type ViewMode = "list" | "edit" | "sources";
 
 const VARIABLE_TYPES: SnippetVariable["type"][] = [
   "echo",
@@ -124,6 +134,14 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
     );
   }
 
+  if (view === "sources") {
+    return (
+      <SourcesView
+        onBack={handleBackToList}
+      />
+    );
+  }
+
   return (
     <div className="flex flex-col h-screen bg-surface">
       {/* Top bar */}
@@ -177,6 +195,7 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
                 key={snippet.id}
                 snippet={snippet}
                 onClick={() => handleOpenEdit(snippet)}
+                onRefresh={refresh}
               />
             ))}
           </div>
@@ -185,17 +204,25 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
 
       {/* Bottom bar */}
       <div className="flex items-center justify-between px-4 py-3 border-t border-border-subtle bg-surface shrink-0">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowImportModal(true)}
+            className="text-xs text-text-secondary hover:text-text-primary transition-colors px-3 py-1.5 rounded-md border border-border-subtle hover:border-border-default"
+          >
+            Import
+          </button>
+          <button
+            onClick={handleExport}
+            className="text-xs text-text-secondary hover:text-text-primary transition-colors px-3 py-1.5 rounded-md border border-border-subtle hover:border-border-default"
+          >
+            Export
+          </button>
+        </div>
         <button
-          onClick={() => setShowImportModal(true)}
-          className="text-xs text-text-secondary hover:text-text-primary transition-colors px-3 py-1.5 rounded-md border border-border-subtle hover:border-border-default"
+          onClick={() => setView("sources")}
+          className="text-xs text-accent hover:text-accent-hover transition-colors px-3 py-1.5 rounded-md border border-accent/30 hover:border-accent/50"
         >
-          Import
-        </button>
-        <button
-          onClick={handleExport}
-          className="text-xs text-text-secondary hover:text-text-primary transition-colors px-3 py-1.5 rounded-md border border-border-subtle hover:border-border-default"
-        >
-          Export
+          Sources
         </button>
       </div>
 
@@ -217,12 +244,15 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
 function SnippetRow({
   snippet,
   onClick,
+  onRefresh,
 }: {
   snippet: Snippet;
   onClick: () => void;
+  onRefresh?: () => void;
 }) {
   const tags = parseTags(snippet.tags);
   const [copied, setCopied] = useState(false);
+  const [isFav, setIsFav] = useState(snippet.is_favorite === 1);
   const { showToast } = useToast();
 
   const handleCopy = useCallback(
@@ -242,6 +272,22 @@ function SnippetRow({
     [snippet.id, showToast]
   );
 
+  const handleToggleFav = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      try {
+        const newVal = await toggleSnippetFavorite(snippet.id);
+        setIsFav(newVal);
+        onRefresh?.();
+      } catch (err) {
+        console.error("Toggle favorite failed:", err);
+      }
+    },
+    [snippet.id, onRefresh]
+  );
+
+  const isFromFile = snippet.source_type === "file";
+
   return (
     <div className="relative group">
       <button
@@ -249,10 +295,22 @@ function SnippetRow({
         className="w-full text-left px-4 py-3 border-b border-border-subtle hover:bg-surface-raised transition-colors"
       >
         <div className="flex items-center gap-2 mb-1">
+          <button
+            onClick={handleToggleFav}
+            className={`text-xs shrink-0 transition-colors ${isFav ? "text-warning" : "text-text-tertiary/30 hover:text-text-tertiary"}`}
+            title={isFav ? "Remove from favorites" : "Add to favorites"}
+          >
+            {isFav ? "★" : "☆"}
+          </button>
           <span className="text-sm font-mono text-accent">{snippet.trigger}</span>
           {snippet.label && (
             <span className="text-xs text-text-secondary truncate">
               {snippet.label}
+            </span>
+          )}
+          {snippet.source_name && (
+            <span className="text-[10px] text-text-tertiary bg-surface-overlay px-1.5 py-0.5 rounded shrink-0 ml-auto">
+              {snippet.source_name}
             </span>
           )}
         </div>
@@ -260,6 +318,11 @@ function SnippetRow({
           {snippet.body}
         </p>
         <div className="flex items-center gap-2">
+          {isFromFile && (
+            <span className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-accent/10 text-accent">
+              file
+            </span>
+          )}
           {tags.map((tag) => (
             <span
               key={tag}
@@ -1108,6 +1171,241 @@ function PermissionRow({
           Open Settings
         </button>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SourcesView — manage external expansion config sources
+// ---------------------------------------------------------------------------
+
+function SourcesView({ onBack }: { onBack: () => void }) {
+  const [sources, setSources] = useState<SnippetSource[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [prefix, setPrefix] = useState(":");
+  const [prefixEdit, setPrefixEdit] = useState(":");
+  const { showToast } = useToast();
+
+  const refreshSources = useCallback(async () => {
+    try {
+      const [srcs, pfx] = await Promise.all([
+        listSnippetSources(),
+        getExpandPrefix(),
+      ]);
+      setSources(srcs);
+      setPrefix(pfx);
+      setPrefixEdit(pfx);
+    } catch (err) {
+      console.error("Failed to load sources:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshSources();
+  }, [refreshSources]);
+
+  const handleAddSource = useCallback(async () => {
+    try {
+      const selected = await openDialog({ directory: true, title: "Choose folder or file for expansion config" });
+      if (!selected) return;
+      const path = typeof selected === "string" ? selected : (selected as any);
+      if (!path) return;
+      const name = window.prompt("Package name:", path.split("/").pop() || "snippets");
+      if (!name) return;
+      const isFolder = !path.endsWith(".yml") && !path.endsWith(".yaml");
+      await addSnippetSource(name, path, isFolder);
+      showToast("Source added and synced");
+      refreshSources();
+    } catch (err) {
+      console.error("Add source failed:", err);
+      showToast(`Failed: ${err}`);
+    }
+  }, [showToast, refreshSources]);
+
+  const handleBoilerplate = useCallback(async () => {
+    try {
+      const folder = await openDialog({ directory: true, title: "Choose folder for new expansion config" });
+      if (!folder) return;
+      const path = typeof folder === "string" ? folder : (folder as any);
+      if (!path) return;
+      const name = window.prompt("Package name:", path.split("/").pop() || "snippets");
+      if (!name) return;
+      await createBoilerplateConfig(path, name);
+      showToast(`Created dispatch-snippets.yml in ${path}`);
+      refreshSources();
+    } catch (err: any) {
+      console.error("Boilerplate failed:", err);
+      showToast(`Failed: ${err}`);
+    }
+  }, [showToast, refreshSources]);
+
+  const handleSync = useCallback(async (id: string) => {
+    try {
+      const result = await syncSnippetSource(id);
+      showToast(`Synced: +${result.added} ~${result.updated} -${result.removed}`);
+      refreshSources();
+    } catch (err) {
+      console.error("Sync failed:", err);
+    }
+  }, [showToast, refreshSources]);
+
+  const handleRemove = useCallback(async (id: string) => {
+    try {
+      await removeSnippetSource(id);
+      showToast("Source removed");
+      refreshSources();
+    } catch (err) {
+      console.error("Remove failed:", err);
+    }
+  }, [showToast, refreshSources]);
+
+  const handleToggleEnabled = useCallback(async (source: SnippetSource) => {
+    try {
+      await updateSnippetSource(source.id, { isEnabled: source.is_enabled === 0 });
+      refreshSources();
+    } catch (err) {
+      console.error("Toggle failed:", err);
+    }
+  }, [refreshSources]);
+
+  const handleSavePrefix = useCallback(async () => {
+    try {
+      await setExpandPrefixApi(prefixEdit);
+      setPrefix(prefixEdit);
+      showToast(`Prefix updated to "${prefixEdit}"`);
+    } catch (err: any) {
+      showToast(`Invalid prefix: ${err}`);
+    }
+  }, [prefixEdit, showToast]);
+
+  return (
+    <div className="flex flex-col h-screen bg-surface">
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-border-subtle bg-surface shrink-0">
+        <button
+          onClick={onBack}
+          className="flex items-center gap-1 text-xs text-text-secondary hover:text-text-primary transition-colors"
+        >
+          <ChevronLeftIcon />
+          Back
+        </button>
+        <span className="text-sm font-semibold text-text-primary">Sources & Settings</span>
+      </div>
+
+      <div className="flex-1 overflow-y-auto">
+        {/* Expand Prefix Setting */}
+        <div className="px-4 py-3 border-b border-border-subtle">
+          <label className="block text-xs font-semibold text-text-secondary mb-2">
+            Trigger Prefix
+          </label>
+          <p className="text-[10px] text-text-tertiary mb-2">
+            Character(s) that activate expansion mode in the command palette.
+          </p>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={prefixEdit}
+              onChange={(e) => setPrefixEdit(e.target.value)}
+              maxLength={3}
+              className="w-16 bg-surface-overlay border border-border-subtle rounded-md px-3 py-1.5 text-sm text-text-primary font-mono text-center focus:outline-none focus:border-accent/50 transition-colors"
+            />
+            {prefixEdit !== prefix && (
+              <button
+                onClick={handleSavePrefix}
+                className="text-xs text-accent hover:text-accent-hover transition-colors"
+              >
+                Save
+              </button>
+            )}
+            <span className="text-[10px] text-text-tertiary ml-2">
+              Current: <code className="font-mono text-accent">{prefix}</code>
+            </span>
+          </div>
+        </div>
+
+        {/* Sources List */}
+        <div className="px-4 py-3">
+          <div className="flex items-center justify-between mb-3">
+            <label className="text-xs font-semibold text-text-secondary">
+              External Sources
+            </label>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleBoilerplate}
+                className="text-[11px] text-accent hover:text-accent-hover transition-colors"
+              >
+                New Config File
+              </button>
+              <button
+                onClick={handleAddSource}
+                className="text-[11px] text-accent hover:text-accent-hover transition-colors"
+              >
+                Import Source
+              </button>
+            </div>
+          </div>
+
+          {loading ? (
+            <p className="text-xs text-text-tertiary">Loading sources...</p>
+          ) : sources.length === 0 ? (
+            <div className="py-6 text-center">
+              <p className="text-xs text-text-tertiary mb-2">No external sources configured.</p>
+              <p className="text-[10px] text-text-tertiary">
+                Add a YAML config file or folder, or create a new one with "New Config File".
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {sources.map((source) => (
+                <div
+                  key={source.id}
+                  className="rounded-lg bg-surface-raised border border-border-subtle p-3"
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-medium text-text-primary">
+                      {source.name}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleSync(source.id)}
+                        className="text-[10px] text-accent hover:text-accent-hover transition-colors"
+                      >
+                        Sync
+                      </button>
+                      <button
+                        onClick={() => handleToggleEnabled(source)}
+                        className={`text-[10px] transition-colors ${source.is_enabled ? "text-success" : "text-text-tertiary"}`}
+                      >
+                        {source.is_enabled ? "Enabled" : "Disabled"}
+                      </button>
+                      <button
+                        onClick={() => handleRemove(source.id)}
+                        className="text-[10px] text-error hover:text-red-400 transition-colors"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                  <p className="text-[10px] font-mono text-text-tertiary truncate">
+                    {source.path}
+                  </p>
+                  <div className="flex items-center gap-3 mt-1">
+                    <span className="text-[10px] text-text-tertiary">
+                      {source.is_folder ? "Folder" : "File"}
+                    </span>
+                    {source.last_synced_at && (
+                      <span className="text-[10px] text-text-tertiary">
+                        Last synced: {new Date(source.last_synced_at).toLocaleString()}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

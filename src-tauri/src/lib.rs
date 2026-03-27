@@ -1,6 +1,7 @@
 mod commands;
 mod db;
 mod expander;
+mod file_parser;
 mod live_listener;
 mod log;
 mod macos_accessibility;
@@ -34,6 +35,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_handle = app.handle().clone();
 
@@ -554,10 +556,16 @@ pub fn run() {
                                                 let _ = window.emit("auto-select-first", ());
                                             }
                                         }
+                                        "show_command_palette" => {
+                                            let _ = window.show();
+                                            let _ = window.set_focus();
+                                            let _ = window.emit("show-command-palette", ());
+                                        }
+                                        // Keep backwards compat for old saved configs
                                         "show_expander" => {
                                             let _ = window.show();
                                             let _ = window.set_focus();
-                                            let _ = window.emit("show-expander-palette", ());
+                                            let _ = window.emit("show-command-palette", ());
                                         }
                                         _ => {}
                                     }
@@ -644,6 +652,18 @@ pub fn run() {
             commands::copy_to_clipboard,
             commands::get_yapture_sync_enabled,
             commands::set_yapture_sync_enabled,
+            commands::list_recent_snippets,
+            commands::list_favorite_snippets,
+            commands::toggle_snippet_favorite,
+            commands::get_expand_prefix,
+            commands::set_expand_prefix,
+            commands::add_snippet_source,
+            commands::list_snippet_sources,
+            commands::update_snippet_source,
+            commands::remove_snippet_source,
+            commands::sync_snippet_source,
+            commands::sync_all_sources,
+            commands::create_boilerplate_config,
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri application")

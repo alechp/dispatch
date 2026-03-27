@@ -60,6 +60,29 @@ export interface Snippet {
   last_used_at: string | null;
   created_at: string;
   updated_at: string;
+  source_id: string | null;
+  source_type: string | null;
+  is_favorite: number | null;
+  source_name: string | null;
+}
+
+export interface SnippetSource {
+  id: string;
+  name: string;
+  path: string;
+  is_folder: number;
+  is_enabled: number;
+  auto_reload: number;
+  last_synced_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SyncResult {
+  added: number;
+  updated: number;
+  removed: number;
+  errors: string[];
 }
 
 export interface SnippetVariable {

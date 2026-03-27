@@ -836,6 +836,264 @@ pub async fn set_yapture_sync_enabled(
         .map_err(|e| e.to_string())
 }
 
+// --- Expander V2 commands: recents, favorites, prefix, sources ---
+
+#[tauri::command]
+pub async fn list_recent_snippets(
+    state: State<'_, Arc<AppState>>,
+    limit: Option<i64>,
+) -> Result<Vec<models::Snippet>, String> {
+    db::list_recent_snippets(&state.db, limit.unwrap_or(5))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_favorite_snippets(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<models::Snippet>, String> {
+    db::list_favorite_snippets(&state.db)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn toggle_snippet_favorite(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<bool, String> {
+    db::toggle_snippet_favorite(&state.db, &id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_expand_prefix(
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    db::get_expand_prefix(&state.db).await
+}
+
+#[tauri::command]
+pub async fn set_expand_prefix(
+    state: State<'_, Arc<AppState>>,
+    prefix: String,
+) -> Result<(), String> {
+    if prefix.is_empty() || prefix.len() > 3 || prefix.contains(' ') {
+        return Err("Prefix must be 1-3 non-whitespace characters".to_string());
+    }
+    db::set_expand_prefix(&state.db, &prefix).await
+}
+
+// --- Snippet Source commands ---
+
+#[tauri::command]
+pub async fn add_snippet_source(
+    state: State<'_, Arc<AppState>>,
+    name: String,
+    path: String,
+    is_folder: bool,
+) -> Result<models::SnippetSource, String> {
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return Err(format!("Path does not exist: {}", path));
+    }
+    let source = db::create_snippet_source(&state.db, &name, &path, is_folder)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Run initial sync
+    let _ = sync_source_internal(&state.db, &source).await;
+    let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
+
+    Ok(source)
+}
+
+#[tauri::command]
+pub async fn list_snippet_sources(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<models::SnippetSource>, String> {
+    db::list_snippet_sources(&state.db)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_snippet_source(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    name: Option<String>,
+    is_enabled: Option<bool>,
+    auto_reload: Option<bool>,
+) -> Result<(), String> {
+    db::update_snippet_source(&state.db, &id, name.as_deref(), is_enabled, auto_reload)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn remove_snippet_source(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<(), String> {
+    db::delete_snippet_source(&state.db, &id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn sync_snippet_source(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<models::SyncResult, String> {
+    let source = db::get_snippet_source(&state.db, &id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Source not found".to_string())?;
+    let result = sync_source_internal(&state.db, &source).await?;
+    let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn sync_all_sources(
+    state: State<'_, Arc<AppState>>,
+) -> Result<models::SyncResult, String> {
+    let sources = db::list_snippet_sources(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut total = models::SyncResult { added: 0, updated: 0, removed: 0, errors: vec![] };
+    for source in &sources {
+        if source.is_enabled == 0 { continue; }
+        match sync_source_internal(&state.db, source).await {
+            Ok(r) => {
+                total.added += r.added;
+                total.updated += r.updated;
+                total.removed += r.removed;
+                total.errors.extend(r.errors);
+            }
+            Err(e) => total.errors.push(e),
+        }
+    }
+    let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
+    Ok(total)
+}
+
+/// Internal sync: parse file(s) and upsert/remove snippets.
+async fn sync_source_internal(
+    pool: &sqlx::SqlitePool,
+    source: &models::SnippetSource,
+) -> Result<models::SyncResult, String> {
+    use crate::file_parser;
+
+    let mut result = models::SyncResult { added: 0, updated: 0, removed: 0, errors: vec![] };
+    let path = std::path::Path::new(&source.path);
+
+    let configs = if source.is_folder == 1 {
+        file_parser::parse_expansion_folder(path)?
+    } else {
+        let config = file_parser::parse_expansion_file(path)?;
+        vec![(source.name.clone(), config)]
+    };
+
+    let mut active_triggers = Vec::new();
+
+    for (_filename, config) in &configs {
+        for snippet in &config.snippets {
+            active_triggers.push(snippet.trigger.clone());
+            let tags = file_parser::tags_to_json(&snippet.tags);
+            let vars = file_parser::variables_to_json(&snippet.variables);
+
+            // Check if it already exists to count adds vs updates
+            let existing: Option<(String,)> = sqlx::query_as(
+                "SELECT id FROM snippets WHERE source_id = ? AND trigger = ?"
+            )
+            .bind(&source.id).bind(&snippet.trigger)
+            .fetch_optional(pool).await.map_err(|e| e.to_string())?;
+
+            if existing.is_some() {
+                result.updated += 1;
+            } else {
+                result.added += 1;
+            }
+
+            db::upsert_source_snippet(
+                pool, &source.id, &snippet.trigger, snippet.label.as_deref(),
+                &snippet.body, tags.as_deref(), vars.as_deref(),
+            ).await.map_err(|e| {
+                result.errors.push(format!("Failed to upsert {}: {}", snippet.trigger, e));
+                e.to_string()
+            }).ok();
+        }
+    }
+
+    // Remove snippets that no longer exist in the source files
+    let removed = db::remove_stale_source_snippets(pool, &source.id, &active_triggers)
+        .await
+        .map_err(|e| e.to_string())?;
+    result.removed = removed;
+
+    // Update last_synced_at
+    let _ = db::update_snippet_source_synced(pool, &source.id).await;
+
+    Ok(result)
+}
+
+// --- Boilerplate generator ---
+
+#[tauri::command]
+pub async fn create_boilerplate_config(
+    state: State<'_, Arc<AppState>>,
+    folder_path: String,
+    package_name: String,
+) -> Result<models::SnippetSource, String> {
+    let dir = std::path::Path::new(&folder_path);
+    if !dir.is_dir() {
+        return Err(format!("Not a directory: {}", folder_path));
+    }
+
+    let file_path = dir.join("dispatch-snippets.yml");
+    if file_path.exists() {
+        return Err("dispatch-snippets.yml already exists in this folder. Import it instead.".to_string());
+    }
+
+    let template = format!(
+r#"# Dispatch Expansion Config
+# Package: {name}
+# Docs: https://dispatch.dev/docs/expansions
+#
+# Add your snippets below. Changes are auto-synced.
+
+name: "{name}"
+snippets:
+  - trigger: ":example"
+    label: "Example snippet"
+    body: "Hello from {name}!"
+"#,
+        name = package_name
+    );
+
+    std::fs::write(&file_path, &template)
+        .map_err(|e| format!("Failed to write file: {}", e))?;
+
+    let source = db::create_snippet_source(
+        &state.db,
+        &package_name,
+        &file_path.to_string_lossy(),
+        false,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // Initial sync
+    let _ = sync_source_internal(&state.db, &source).await;
+    let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
+
+    Ok(source)
+}
+
 /// Test text injection by simulating a small paste. Returns a diagnostic message.
 #[tauri::command]
 pub async fn test_text_injection() -> Result<String, String> {

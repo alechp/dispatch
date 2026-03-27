@@ -20,6 +20,7 @@ import { ExpanderPalette } from "./components/ExpanderPalette";
 import { YaptureSettings } from "./components/YaptureSettings";
 import { NotificationBanner } from "./components/NotificationBanner";
 import { listen } from "@tauri-apps/api/event";
+import { getExpandPrefix } from "./lib/snippets";
 import type { Notification, QueryFilters } from "./lib/types";
 
 export type ActiveScreen = "feed" | "telemetry" | "sessions" | "expander" | "settings";
@@ -38,6 +39,7 @@ export default function App() {
   const [bannerQueue, setBannerQueue] = useState<Notification[]>([]);
   const [visualMode, setVisualMode] = useState(false);
   const [visualSelections, setVisualSelections] = useState<Set<string>>(new Set());
+  const [expandPrefix, setExpandPrefix] = useState(":");
   const [visualAnchor, setVisualAnchor] = useState<number | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -94,10 +96,15 @@ export default function App() {
 
   useNotificationListener(handleNewNotification, refresh);
 
-  // Listen for global Cmd+Shift+E hotkey
+  // Load expand prefix from settings
   useEffect(() => {
-    const unlisten = listen("show-expander-palette", () => {
-      setShowExpanderPalette(true);
+    getExpandPrefix().then(setExpandPrefix).catch(() => {});
+  }, []);
+
+  // Listen for global CMD+SHIFT+K hotkey → open command palette
+  useEffect(() => {
+    const unlisten = listen("show-command-palette", () => {
+      setShowCommandPalette(true);
     });
     return () => { unlisten.then((fn) => fn()); };
   }, []);
@@ -138,6 +145,7 @@ export default function App() {
     copyToClipboard(text);
     toastCtx.showToast("Copied to clipboard");
     setShowExpanderPalette(false);
+    setShowCommandPalette(false);
   }, [toastCtx]);
 
   // Reset selection when filter or search changes
@@ -363,6 +371,8 @@ export default function App() {
         <CommandPalette
           onClose={() => setShowCommandPalette(false)}
           onAction={handleCommandPaletteAction}
+          onExpand={handleExpand}
+          expandPrefix={expandPrefix}
         />
       )}
       <NotificationBanner
