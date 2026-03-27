@@ -71,6 +71,14 @@ pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             }
         }
     }
+    // Indexes must be created after ALTER TABLE adds the columns
+    for stmt in [
+        "CREATE INDEX IF NOT EXISTS idx_snippets_source ON snippets(source_id)",
+        "CREATE INDEX IF NOT EXISTS idx_snippets_favorite ON snippets(is_favorite)",
+        "CREATE INDEX IF NOT EXISTS idx_snippets_source_trigger ON snippets(source_id, trigger)",
+    ] {
+        let _ = sqlx::query(stmt).execute(pool).await;
+    }
 
     Ok(())
 }

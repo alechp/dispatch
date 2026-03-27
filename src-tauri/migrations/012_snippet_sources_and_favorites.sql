@@ -10,7 +10,3 @@ CREATE TABLE IF NOT EXISTS snippet_sources (
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
-
-CREATE INDEX IF NOT EXISTS idx_snippets_source ON snippets(source_id);
-CREATE INDEX IF NOT EXISTS idx_snippets_favorite ON snippets(is_favorite);
-CREATE INDEX IF NOT EXISTS idx_snippets_source_trigger ON snippets(source_id, trigger);
