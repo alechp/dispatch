@@ -16,6 +16,9 @@ import {
   syncSnippetSource,
   updateSnippetSource,
   createBoilerplateConfig,
+  readSourceFile,
+  writeSourceFile,
+  refreshTriggers,
 } from "../lib/snippets";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
@@ -34,7 +37,7 @@ interface SnippetManagerProps {
   onBack: () => void;
 }
 
-type ViewMode = "list" | "edit" | "sources";
+type ViewMode = "list" | "edit" | "sources" | "edit-source";
 
 const VARIABLE_TYPES: SnippetVariable["type"][] = [
   "echo",
@@ -76,7 +79,9 @@ function parseTags(json: string | null): string[] {
 
 export function SnippetManager({ onBack }: SnippetManagerProps) {
   const [search, setSearch] = useState("");
-  const { snippets, loading, refresh } = useSnippets(search || undefined);
+  const [sourceFilter, setSourceFilter] = useState<{ id: string; name: string } | null>(null);
+  const [editingSource, setEditingSource] = useState<SnippetSource | null>(null);
+  const { snippets, loading, refresh } = useSnippets(search || undefined, undefined, sourceFilter?.id);
 
   const [view, setView] = useState<ViewMode>("list");
   const [editingSnippet, setEditingSnippet] = useState<Snippet | null>(null);
@@ -152,10 +157,29 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
     );
   }
 
+  if (view === "edit-source" && editingSource) {
+    return (
+      <SourceFileEditor
+        source={editingSource}
+        onBack={() => {
+          setEditingSource(null);
+          setView("sources");
+        }}
+        onSaved={() => {
+          refresh();
+        }}
+      />
+    );
+  }
+
   if (view === "sources") {
     return (
       <SourcesView
         onBack={handleBackToList}
+        onEditSource={(source) => {
+          setEditingSource(source);
+          setView("edit-source");
+        }}
       />
     );
   }
@@ -205,6 +229,21 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
           New Config File
         </button>
       </div>
+
+      {/* Source filter chip */}
+      {sourceFilter && (
+        <div className="flex items-center justify-between px-4 py-2 bg-accent/5 border-b border-border-subtle">
+          <span className="text-[11px] text-accent font-medium">
+            Showing: {sourceFilter.name}
+          </span>
+          <button
+            onClick={() => setSourceFilter(null)}
+            className="text-[11px] text-text-tertiary hover:text-text-primary transition-colors"
+          >
+            Clear
+          </button>
+        </div>
+      )}
 
       {/* Snippet list */}
       <div className="flex-1 overflow-y-auto">
@@ -497,6 +536,17 @@ function SnippetEditView({
           </button>
         )}
       </div>
+
+      {/* Warning for source-imported snippets */}
+      {isEdit && snippet?.source_type === "file" && (
+        <div className="px-4 py-2 bg-warning/10 border-b border-warning/20">
+          <p className="text-[11px] text-warning">
+            This snippet is imported from a source file. Edits here only apply locally
+            and will be overwritten on next sync. Edit the source file directly for
+            permanent changes.
+          </p>
+        </div>
+      )}
 
       {/* Form */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
@@ -1213,7 +1263,7 @@ function PermissionRow({
 // SourcesView — manage external expansion config sources
 // ---------------------------------------------------------------------------
 
-function SourcesView({ onBack }: { onBack: () => void }) {
+function SourcesView({ onBack, onEditSource }: { onBack: () => void; onEditSource?: (source: SnippetSource) => void }) {
   const [sources, setSources] = useState<SnippetSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [prefix, setPrefix] = useState(":");
@@ -1298,6 +1348,7 @@ function SourcesView({ onBack }: { onBack: () => void }) {
   const handleToggleEnabled = useCallback(async (source: SnippetSource) => {
     try {
       await updateSnippetSource(source.id, { isEnabled: source.is_enabled === 0 });
+      await refreshTriggers();
       refreshSources();
     } catch (err) {
       console.error("Toggle failed:", err);
@@ -1394,13 +1445,21 @@ function SourcesView({ onBack }: { onBack: () => void }) {
               {sources.map((source) => (
                 <div
                   key={source.id}
-                  className="rounded-lg bg-surface-raised border border-border-subtle p-3"
+                  className={`rounded-lg bg-surface-raised border border-border-subtle p-3 transition-opacity ${!source.is_enabled ? "opacity-50" : ""}`}
                 >
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-xs font-medium text-text-primary">
                       {source.name}
                     </span>
                     <div className="flex items-center gap-2">
+                      {onEditSource && (
+                        <button
+                          onClick={() => onEditSource(source)}
+                          className="text-[10px] text-accent hover:text-accent-hover transition-colors"
+                        >
+                          Edit
+                        </button>
+                      )}
                       <button
                         onClick={() => handleSync(source.id)}
                         className="text-[10px] text-accent hover:text-accent-hover transition-colors"
@@ -1439,6 +1498,116 @@ function SourcesView({ onBack }: { onBack: () => void }) {
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SourceFileEditor — edit YAML source file inline
+// ---------------------------------------------------------------------------
+
+function SourceFileEditor({
+  source,
+  onBack,
+  onSaved,
+}: {
+  source: SnippetSource;
+  onBack: () => void;
+  onSaved: () => void;
+}) {
+  const [content, setContent] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const { showToast } = useToast();
+
+  useEffect(() => {
+    readSourceFile(source.id)
+      .then((text) => {
+        setContent(text);
+        setLoading(false);
+      })
+      .catch((err) => {
+        setError(`Failed to read file: ${err}`);
+        setLoading(false);
+      });
+  }, [source.id]);
+
+  const handleSave = useCallback(async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await writeSourceFile(source.id, content);
+      setDirty(false);
+      showToast(`Saved — +${result.added} added, ~${result.updated} updated, -${result.removed} removed`);
+      onSaved();
+    } catch (err: any) {
+      setError(String(err));
+    } finally {
+      setSaving(false);
+    }
+  }, [source.id, content, showToast, onSaved]);
+
+  return (
+    <div className="flex flex-col h-screen bg-surface">
+      {/* Top bar */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle bg-surface shrink-0">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onBack}
+            className="flex items-center gap-1 text-xs text-text-secondary hover:text-text-primary transition-colors"
+          >
+            <ChevronLeftIcon />
+            Sources
+          </button>
+          <span className="text-sm font-semibold text-text-primary">{source.name}</span>
+        </div>
+        <button
+          onClick={handleSave}
+          disabled={saving || !dirty}
+          className="text-xs text-white bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors px-3 py-1.5 rounded-md"
+        >
+          {saving ? "Saving..." : "Save"}
+        </button>
+      </div>
+
+      {/* Editor */}
+      {loading ? (
+        <div className="flex-1 flex items-center justify-center">
+          <p className="text-sm text-text-tertiary">Loading file...</p>
+        </div>
+      ) : (
+        <div className="flex-1 overflow-hidden flex flex-col">
+          <textarea
+            value={content}
+            onChange={(e) => {
+              setContent(e.target.value);
+              setDirty(true);
+              setError(null);
+            }}
+            spellCheck={false}
+            className="flex-1 w-full bg-surface-overlay px-4 py-3 text-xs text-text-primary font-mono leading-relaxed focus:outline-none resize-none"
+          />
+        </div>
+      )}
+
+      {/* Status bar */}
+      <div className="px-4 py-2 border-t border-border-subtle bg-surface shrink-0">
+        {error ? (
+          <p className="text-[11px] text-error">{error}</p>
+        ) : (
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-text-tertiary font-mono truncate">
+              {source.path}
+            </span>
+            <span className="text-[10px] text-text-tertiary">
+              {dirty ? "Modified" : "Saved"}
+              {source.last_synced_at && ` · Last synced: ${new Date(source.last_synced_at).toLocaleString()}`}
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );

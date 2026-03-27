@@ -16,7 +16,7 @@ pub async fn refresh_trigger_cache(
     cache: &Arc<RwLock<Vec<TriggerEntry>>>,
 ) -> Result<(), sqlx::Error> {
     let rows: Vec<(String, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, trigger, variables FROM snippets WHERE is_enabled = 1",
+        "SELECT s.id, s.trigger, s.variables FROM snippets s LEFT JOIN snippet_sources ss ON s.source_id = ss.id WHERE s.is_enabled = 1 AND (s.source_id IS NULL OR ss.is_enabled = 1 OR ss.is_enabled IS NULL)",
     )
     .fetch_all(pool)
     .await?;

@@ -637,10 +637,15 @@ pub async fn list_snippets(
     pool: &SqlitePool,
     search: Option<&str>,
     tag: Option<&str>,
+    source_id: Option<&str>,
 ) -> Result<Vec<crate::models::Snippet>, sqlx::Error> {
-    let mut sql = format!("SELECT {} FROM snippets s LEFT JOIN snippet_sources ss ON s.source_id = ss.id WHERE s.is_enabled = 1", SNIPPET_COLS_WITH_SOURCE);
+    let mut sql = format!("SELECT {} FROM snippets s LEFT JOIN snippet_sources ss ON s.source_id = ss.id WHERE s.is_enabled = 1 AND (s.source_id IS NULL OR ss.is_enabled = 1 OR ss.is_enabled IS NULL)", SNIPPET_COLS_WITH_SOURCE);
     let mut args: Vec<String> = Vec::new();
 
+    if let Some(sid) = source_id {
+        sql.push_str(" AND s.source_id = ?");
+        args.push(sid.to_string());
+    }
     if let Some(s) = search {
         sql.push_str(" AND (s.trigger LIKE ? OR s.label LIKE ? OR s.body LIKE ? OR s.tags LIKE ?)");
         let pattern = format!("%{}%", s);
@@ -681,7 +686,7 @@ pub async fn increment_snippet_use(pool: &SqlitePool, id: &str) -> Result<(), sq
 
 pub async fn list_recent_snippets(pool: &SqlitePool, limit: i64) -> Result<Vec<crate::models::Snippet>, sqlx::Error> {
     let sql = format!(
-        "SELECT {} FROM snippets s LEFT JOIN snippet_sources ss ON s.source_id = ss.id WHERE s.is_enabled = 1 AND s.last_used_at IS NOT NULL ORDER BY s.last_used_at DESC LIMIT ?",
+        "SELECT {} FROM snippets s LEFT JOIN snippet_sources ss ON s.source_id = ss.id WHERE s.is_enabled = 1 AND (s.source_id IS NULL OR ss.is_enabled = 1 OR ss.is_enabled IS NULL) AND s.last_used_at IS NOT NULL ORDER BY s.last_used_at DESC LIMIT ?",
         SNIPPET_COLS_WITH_SOURCE
     );
     let rows: Vec<SnippetRowWithSource> = sqlx::query_as(&sql).bind(limit).fetch_all(pool).await?;
@@ -690,7 +695,7 @@ pub async fn list_recent_snippets(pool: &SqlitePool, limit: i64) -> Result<Vec<c
 
 pub async fn list_favorite_snippets(pool: &SqlitePool) -> Result<Vec<crate::models::Snippet>, sqlx::Error> {
     let sql = format!(
-        "SELECT {} FROM snippets s LEFT JOIN snippet_sources ss ON s.source_id = ss.id WHERE s.is_enabled = 1 AND s.is_favorite = 1 ORDER BY s.use_count DESC",
+        "SELECT {} FROM snippets s LEFT JOIN snippet_sources ss ON s.source_id = ss.id WHERE s.is_enabled = 1 AND (s.source_id IS NULL OR ss.is_enabled = 1 OR ss.is_enabled IS NULL) AND s.is_favorite = 1 ORDER BY s.use_count DESC",
         SNIPPET_COLS_WITH_SOURCE
     );
     let rows: Vec<SnippetRowWithSource> = sqlx::query_as(&sql).fetch_all(pool).await?;

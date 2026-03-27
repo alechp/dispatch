@@ -664,6 +664,9 @@ pub fn run() {
             commands::sync_snippet_source,
             commands::sync_all_sources,
             commands::create_boilerplate_config,
+            commands::refresh_triggers,
+            commands::read_source_file,
+            commands::write_source_file,
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri application")

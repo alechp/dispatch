@@ -334,8 +334,12 @@ pub async fn list_snippets(
     state: State<'_, Arc<AppState>>,
     search: Option<String>,
     tag: Option<String>,
+    source_id: Option<String>,
 ) -> Result<Vec<models::Snippet>, String> {
-    db::list_snippets(&state.db, search.as_deref(), tag.as_deref())
+    let search_ref = search.as_deref();
+    let tag_ref = tag.as_deref();
+    let source_id_ref = source_id.as_deref();
+    db::list_snippets(&state.db, search_ref, tag_ref, source_id_ref)
         .await
         .map_err(|e| e.to_string())
 }
@@ -1080,6 +1084,50 @@ pub async fn create_boilerplate_config(
     let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
 
     Ok(source)
+}
+
+#[tauri::command]
+pub async fn refresh_triggers(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn read_source_file(
+    state: State<'_, Arc<AppState>>,
+    source_id: String,
+) -> Result<String, String> {
+    let source = db::get_snippet_source(&state.db, &source_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Source not found".to_string())?;
+    std::fs::read_to_string(&source.path)
+        .map_err(|e| format!("Failed to read {}: {}", source.path, e))
+}
+
+#[tauri::command]
+pub async fn write_source_file(
+    state: State<'_, Arc<AppState>>,
+    source_id: String,
+    content: String,
+) -> Result<models::SyncResult, String> {
+    let source = db::get_snippet_source(&state.db, &source_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Source not found".to_string())?;
+
+    // Validate YAML before writing
+    let _config: crate::file_parser::ExpansionConfig = serde_yaml::from_str(&content)
+        .map_err(|e| format!("Invalid YAML: {}", e))?;
+
+    std::fs::write(&source.path, &content)
+        .map_err(|e| format!("Failed to write {}: {}", source.path, e))?;
+
+    // Re-sync after writing
+    let result = sync_source_internal(&state.db, &source).await?;
+    let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
+    Ok(result)
 }
 
 /// Test text injection by simulating a small paste. Returns a diagnostic message.

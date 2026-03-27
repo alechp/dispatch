@@ -1,8 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Snippet } from "./types";
 
-export async function listSnippets(search?: string, tag?: string): Promise<Snippet[]> {
-  return invoke("list_snippets", { search: search ?? null, tag: tag ?? null });
+export async function listSnippets(search?: string, tag?: string, sourceId?: string): Promise<Snippet[]> {
+  return invoke("list_snippets", { search: search ?? null, tag: tag ?? null, sourceId: sourceId ?? null });
 }
 
 export async function createSnippet(data: {
@@ -107,6 +107,18 @@ export async function syncAllSources(): Promise<SyncResult> {
 
 export async function createBoilerplateConfig(folderPath: string, packageName: string): Promise<SnippetSource> {
   return invoke("create_boilerplate_config", { folderPath, packageName });
+}
+
+export async function refreshTriggers(): Promise<void> {
+  return invoke("refresh_triggers");
+}
+
+export async function readSourceFile(sourceId: string): Promise<string> {
+  return invoke<string>("read_source_file", { sourceId });
+}
+
+export async function writeSourceFile(sourceId: string, content: string): Promise<SyncResult> {
+  return invoke<SyncResult>("write_source_file", { sourceId, content });
 }
 
 import type { SnippetSource, SyncResult } from "./types";
