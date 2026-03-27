@@ -37,6 +37,25 @@ pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::raw_sql(include_str!("../migrations/008_yapture_oauth.sql"))
         .execute(pool)
         .await?;
+    sqlx::raw_sql(include_str!("../migrations/009_hotkey_config.sql"))
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(include_str!("../migrations/010_update_hotkey_defaults.sql"))
+        .execute(pool)
+        .await?;
+
+    // Migration 011: yapture_task_id + sync setting
+    for stmt in ["ALTER TABLE notifications ADD COLUMN yapture_task_id TEXT"] {
+        if let Err(e) = sqlx::query(stmt).execute(pool).await {
+            if !e.to_string().contains("duplicate column") {
+                return Err(e);
+            }
+        }
+    }
+    sqlx::raw_sql("INSERT OR IGNORE INTO settings (key, value) VALUES ('yapture_bidirectional_sync', 'true')")
+        .execute(pool)
+        .await?;
+
     Ok(())
 }
 
@@ -455,8 +474,8 @@ pub async fn get_notification_by_id(
     pool: &SqlitePool,
     id: &str,
 ) -> Result<Option<crate::models::Notification>, sqlx::Error> {
-    let row: Option<(String, String, String, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, i32, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, source, event_type, title, body, metadata, project, tmux_session, tmux_window, tmux_pane, is_read, created_at, read_at FROM notifications WHERE id = ?"
+    let row: Option<(String, String, String, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, i32, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT id, source, event_type, title, body, metadata, project, tmux_session, tmux_window, tmux_pane, is_read, created_at, read_at, yapture_task_id FROM notifications WHERE id = ?"
     )
     .bind(id)
     .fetch_optional(pool)
@@ -476,7 +495,26 @@ pub async fn get_notification_by_id(
         is_read: r.10,
         created_at: r.11,
         read_at: r.12,
+        yapture_task_id: r.13,
     }))
+}
+
+pub async fn set_yapture_task_id(pool: &SqlitePool, notification_id: &str, yapture_task_id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE notifications SET yapture_task_id = ? WHERE id = ?")
+        .bind(yapture_task_id)
+        .bind(notification_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn get_all_notification_yapture_ids(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT yapture_task_id FROM notifications WHERE yapture_task_id IS NOT NULL AND yapture_task_id != ''"
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| r.0).collect())
 }
 
 // --- Snippet functions ---
@@ -612,6 +650,46 @@ pub async fn get_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>,
             .fetch_optional(pool)
             .await?;
     Ok(row.map(|r| r.0))
+}
+
+pub const DEFAULT_HOTKEY_CONFIG: &str = r#"{"bindings":[{"action":"toggle_window","keys":["CommandOrControl+Shift+D"],"enabled":true,"scope":"global","category":"Global","description":"Toggle window"},{"action":"show_expander","keys":["CommandOrControl+Shift+K"],"enabled":true,"scope":"global","category":"Global","description":"Snippet expander"},{"action":"select_next","keys":["j","ArrowDown"],"enabled":true,"scope":"app","category":"Navigation","description":"Next notification"},{"action":"select_prev","keys":["k","ArrowUp"],"enabled":true,"scope":"app","category":"Navigation","description":"Previous notification"},{"action":"focus_search","keys":["f"],"enabled":true,"scope":"app","category":"Navigation","description":"Focus search"},{"action":"clear_selection","keys":["Escape"],"enabled":true,"scope":"app","category":"Navigation","description":"Clear selection"},{"action":"mark_selected_read","keys":["Enter","r"],"enabled":true,"scope":"app","category":"Actions","description":"Mark read"},{"action":"delete_selected","keys":["d","Backspace"],"enabled":true,"scope":"app","category":"Actions","description":"Delete"},{"action":"focus_terminal","keys":["t"],"enabled":true,"scope":"app","category":"Actions","description":"Focus terminal"},{"action":"mark_all_read","keys":["R"],"enabled":true,"scope":"app","category":"Actions","description":"Mark all read"},{"action":"clear_all","keys":["D"],"enabled":true,"scope":"app","category":"Actions","description":"Clear all"},{"action":"filter_all","keys":["1"],"enabled":true,"scope":"app","category":"Filters","description":"All"},{"action":"filter_unread","keys":["2"],"enabled":true,"scope":"app","category":"Filters","description":"Unread"},{"action":"filter_read","keys":["3"],"enabled":true,"scope":"app","category":"Filters","description":"Read"},{"action":"toggle_help","keys":["?"],"enabled":true,"scope":"app","category":"Help","description":"Toggle help"},{"action":"toggle_visual_mode","keys":["v"],"enabled":true,"scope":"app","category":"Visual","description":"Toggle visual mode"},{"action":"visual_toggle_item","keys":[" "],"enabled":true,"scope":"app","category":"Visual","description":"Toggle item selection"}]}"#;
+
+pub async fn get_hotkey_config(
+    pool: &SqlitePool,
+) -> Result<crate::models::HotkeyConfig, String> {
+    let defaults: crate::models::HotkeyConfig = serde_json::from_str(DEFAULT_HOTKEY_CONFIG)
+        .map_err(|e| format!("Bad default config: {}", e))?;
+
+    let saved_json = get_setting(pool, "hotkey_config")
+        .await
+        .map_err(|e| e.to_string())?;
+
+    match saved_json {
+        None => Ok(defaults),
+        Some(json) => {
+            let mut config: crate::models::HotkeyConfig = serde_json::from_str(&json)
+                .map_err(|e| format!("Failed to parse hotkey config: {}", e))?;
+            // Add any actions from defaults that are missing in saved config
+            let existing: std::collections::HashSet<String> =
+                config.bindings.iter().map(|b| b.action.clone()).collect();
+            for binding in &defaults.bindings {
+                if !existing.contains(&binding.action) {
+                    config.bindings.push(binding.clone());
+                }
+            }
+            Ok(config)
+        }
+    }
+}
+
+pub async fn set_hotkey_config(
+    pool: &SqlitePool,
+    config: &crate::models::HotkeyConfig,
+) -> Result<(), String> {
+    let json = serde_json::to_string(config).map_err(|e| e.to_string())?;
+    set_setting(pool, "hotkey_config", &json)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 pub async fn set_setting(pool: &SqlitePool, key: &str, value: &str) -> Result<(), sqlx::Error> {

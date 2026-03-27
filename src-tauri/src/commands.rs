@@ -75,6 +75,28 @@ pub async fn delete_notification(
     state: State<'_, Arc<AppState>>,
     id: String,
 ) -> Result<bool, String> {
+    // Check sync setting + get yapture_task_id before deleting
+    let sync_enabled = db::get_setting(&state.db, "yapture_bidirectional_sync")
+        .await.ok().flatten().unwrap_or_else(|| "true".into()) == "true";
+
+    if sync_enabled {
+        if let Ok(Some(n)) = db::get_notification_by_id(&state.db, &id).await {
+            if let Some(yapture_id) = n.yapture_task_id {
+                if !yapture_id.is_empty() {
+                    let db = state.db.clone();
+                    let token = state.yapture_tokens.lock().ok().and_then(|t| t.service_token.clone());
+                    tokio::spawn(async move {
+                        if let Some(config) = yapture::load_config(&db, token).await {
+                            if let Err(e) = yapture::complete_yapture_task(&config, &yapture_id).await {
+                                crate::log::log(&format!("[yapture-sync] delete: failed to complete {}: {}", yapture_id, e));
+                            }
+                        }
+                    });
+                }
+            }
+        }
+    }
+
     db::delete_notification(&state.db, &id)
         .await
         .map_err(|e| e.to_string())
@@ -84,6 +106,32 @@ pub async fn delete_notification(
 pub async fn clear_all_notifications(
     state: State<'_, Arc<AppState>>,
 ) -> Result<u64, String> {
+    // Sync all yapture tasks before clearing
+    let sync_enabled = db::get_setting(&state.db, "yapture_bidirectional_sync")
+        .await.ok().flatten().unwrap_or_else(|| "true".into()) == "true";
+
+    if sync_enabled {
+        if let Ok(yapture_ids) = db::get_all_notification_yapture_ids(&state.db).await {
+            if !yapture_ids.is_empty() {
+                let db = state.db.clone();
+                let token = state.yapture_tokens.lock().ok().and_then(|t| t.service_token.clone());
+                tokio::spawn(async move {
+                    if let Some(config) = yapture::load_config(&db, token).await {
+                        for yapture_id in yapture_ids {
+                            let config = config.clone();
+                            let yid = yapture_id.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = yapture::complete_yapture_task(&config, &yid).await {
+                                    crate::log::log(&format!("[yapture-sync] clear_all: failed {}: {}", yid, e));
+                                }
+                            });
+                        }
+                    }
+                });
+            }
+        }
+    }
+
     db::clear_all_notifications(&state.db)
         .await
         .map_err(|e| e.to_string())
@@ -109,36 +157,89 @@ pub async fn get_unread_count(
     Ok(total)
 }
 
-#[tauri::command]
-pub async fn focus_terminal(
-    session: String,
-    window: Option<String>,
-    pane: Option<String>,
+/// Shared logic: focus a tmux terminal session. Used by both the Tauri command and deep link handler.
+pub async fn do_focus_terminal(
+    db: &sqlx::SqlitePool,
+    session: &str,
+    window: Option<&str>,
+    pane: Option<&str>,
 ) -> Result<(), String> {
-    // Bring Kitty to foreground
-    std::process::Command::new("open")
-        .args(&["-a", "kitty"])
-        .output()
-        .map_err(|e| e.to_string())?;
+    // Detect terminal app: DB setting > $TERM_PROGRAM > fallback to kitty
+    let terminal = crate::db::get_setting(db, "terminal_app")
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| {
+            std::env::var("TERM_PROGRAM").unwrap_or_else(|_| "kitty".into())
+        });
 
-    // Build tmux target: session:window.pane
-    let mut target = session.clone();
-    if let Some(w) = &window {
-        target.push_str(&format!(":{}", w));
-        if let Some(p) = &pane {
-            target.push_str(&format!(".{}", p));
+    // Bring terminal to foreground
+    std::process::Command::new("open")
+        .args(&["-a", &terminal])
+        .output()
+        .map_err(|e| format!("Failed to open {}: {}", terminal, e))?;
+
+    // Wait for terminal to activate
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Switch tmux session
+    std::process::Command::new("tmux")
+        .args(&["switch-client", "-t", session])
+        .output()
+        .map_err(|e| format!("tmux switch-client failed: {}", e))?;
+
+    // Select specific window if provided
+    if let Some(w) = window {
+        let win_target = format!("{}:{}", session, w);
+        let _ = std::process::Command::new("tmux")
+            .args(&["select-window", "-t", &win_target])
+            .output();
+
+        // Select specific pane if provided
+        if let Some(p) = pane {
+            let pane_target = format!("{}:{}.{}", session, w, p);
+            let _ = std::process::Command::new("tmux")
+                .args(&["select-pane", "-t", &pane_target])
+                .output();
         }
     }
 
-    // Switch tmux client
-    let output = std::process::Command::new("tmux")
-        .args(&["switch-client", "-t", &target])
-        .output()
-        .map_err(|e| e.to_string())?;
+    Ok(())
+}
 
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+#[tauri::command]
+pub async fn focus_terminal(
+    state: State<'_, Arc<AppState>>,
+    session: String,
+    window: Option<String>,
+    pane: Option<String>,
+    notification_id: Option<String>,
+) -> Result<(), String> {
+    do_focus_terminal(&state.db, &session, window.as_deref(), pane.as_deref()).await?;
+
+    // Sync to Yapture: complete the task when terminal is focused
+    if let Some(nid) = notification_id {
+        let sync_enabled = db::get_setting(&state.db, "yapture_bidirectional_sync")
+            .await.ok().flatten().unwrap_or_else(|| "true".into()) == "true";
+        if sync_enabled {
+            if let Ok(Some(n)) = db::get_notification_by_id(&state.db, &nid).await {
+                if let Some(yapture_id) = n.yapture_task_id {
+                    if !yapture_id.is_empty() {
+                        let db = state.db.clone();
+                        let token = state.yapture_tokens.lock().ok().and_then(|t| t.service_token.clone());
+                        tokio::spawn(async move {
+                            if let Some(config) = yapture::load_config(&db, token).await {
+                                if let Err(e) = yapture::complete_yapture_task(&config, &yapture_id).await {
+                                    crate::log::log(&format!("[yapture-sync] focus_terminal: failed {}: {}", yapture_id, e));
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+        }
     }
+
     Ok(())
 }
 
@@ -377,14 +478,69 @@ pub async fn set_live_expansion_enabled(
     Ok(())
 }
 
+/// Check Accessibility permission (needed for NSEvent keyboard listener + text injection).
 #[tauri::command]
 pub async fn check_accessibility_permission() -> Result<bool, String> {
-    Ok(macos_accessibility::check_permission())
+    Ok(macos_accessibility::check_accessibility())
+}
+
+/// Request Accessibility permission (shows macOS system prompt if not granted).
+#[tauri::command]
+pub async fn request_accessibility_permission() -> Result<bool, String> {
+    Ok(macos_accessibility::request_accessibility())
+}
+
+/// Alias for check_accessibility_permission (kept for backward compatibility).
+#[tauri::command]
+pub async fn check_accessibility_trusted() -> Result<bool, String> {
+    Ok(macos_accessibility::check_accessibility())
+}
+
+// --- Hotkey Config commands ---
+
+#[tauri::command]
+pub async fn get_hotkey_config(
+    state: State<'_, Arc<AppState>>,
+) -> Result<models::HotkeyConfig, String> {
+    db::get_hotkey_config(&state.db).await
 }
 
 #[tauri::command]
-pub async fn request_accessibility_permission() -> Result<bool, String> {
-    Ok(macos_accessibility::request_permission())
+pub async fn set_hotkey_config(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+    config: models::HotkeyConfig,
+) -> Result<(), String> {
+    // Save to DB
+    db::set_hotkey_config(&state.db, &config).await?;
+
+    // Re-register global shortcuts
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    // Unregister all existing global shortcuts
+    let _ = app.global_shortcut().unregister_all();
+
+    // Build new shortcut map and register enabled global shortcuts
+    let mut new_map = HashMap::new();
+    for binding in &config.bindings {
+        if binding.scope == "global" && binding.enabled {
+            for key_str in &binding.keys {
+                if let Ok(shortcut) = key_str.parse::<tauri_plugin_global_shortcut::Shortcut>() {
+                    if let Err(e) = app.global_shortcut().register(shortcut) {
+                        eprintln!("[hotkeys] failed to register {}: {}", key_str, e);
+                    } else {
+                        new_map.insert(key_str.clone(), binding.action.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // Update the shared map so the existing handler picks up the new bindings
+    let mut map = state.global_shortcut_map.write();
+    *map = new_map;
+
+    Ok(())
 }
 
 // --- Yapture Integration commands ---
@@ -407,7 +563,7 @@ pub async fn get_yapture_config(
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
     let has_token = state.yapture_tokens.lock()
-        .map(|t| t.service_token.as_ref().map(|s| !s.is_empty()).unwrap_or(false))
+        .map(|t| t.access_token.as_ref().map(|s| !s.is_empty()).unwrap_or(false))
         .unwrap_or(false);
 
     Ok(yapture::YaptureConfigResponse {
@@ -456,10 +612,10 @@ pub async fn test_yapture_connection(
         .await
         .map_err(|e| e.to_string())?
         .unwrap_or_else(|| "https://api.yapture.app".to_string());
-    let service_token = state.yapture_tokens.lock()
-        .map(|t| t.service_token.clone().unwrap_or_default())
+    let access_token = state.yapture_tokens.lock()
+        .map(|t| t.access_token.clone().unwrap_or_default())
         .unwrap_or_default();
-    Ok(yapture::test_connection(&api_url, &service_token).await)
+    Ok(yapture::test_connection(&api_url, &access_token).await)
 }
 
 // --- OAuth commands ---
@@ -482,6 +638,54 @@ pub async fn yapture_start_oauth(
     Ok(auth_url)
 }
 
+/// Refresh the Yapture access token using the stored refresh token.
+/// Returns true if refresh succeeded, false if no refresh token or refresh failed.
+#[tauri::command]
+pub async fn yapture_refresh(
+    state: State<'_, Arc<AppState>>,
+) -> Result<bool, String> {
+    let api_url = db::get_setting(&state.db, "yapture_api_url")
+        .await
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|| "https://api.yapture.app".to_string());
+
+    let refresh_token = state.yapture_tokens.lock()
+        .map(|t| t.refresh_token.clone())
+        .unwrap_or(None);
+
+    let refresh_token = match refresh_token {
+        Some(rt) if !rt.is_empty() => rt,
+        _ => {
+            eprintln!("[yapture] no refresh token available");
+            return Ok(false);
+        }
+    };
+
+    match yapture::refresh_access_token(&api_url, &refresh_token).await {
+        Ok(tokens) => {
+            eprintln!("[yapture] token refreshed successfully");
+            // Update in-memory
+            if let Ok(mut t) = state.yapture_tokens.lock() {
+                t.access_token = Some(tokens.access_token.clone());
+                t.service_token = Some(tokens.access_token.clone());
+                if let Some(ref rt) = tokens.refresh_token {
+                    t.refresh_token = Some(rt.clone());
+                }
+            }
+            // Persist to DB
+            let _ = db::set_setting(&state.db, "yapture_access_token", &tokens.access_token).await;
+            if let Some(ref rt) = tokens.refresh_token {
+                let _ = db::set_setting(&state.db, "yapture_refresh_token", rt).await;
+            }
+            Ok(true)
+        }
+        Err(e) => {
+            eprintln!("[yapture] token refresh failed: {}", e);
+            Ok(false)
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn yapture_disconnect(
     state: State<'_, Arc<AppState>>,
@@ -498,7 +702,14 @@ pub async fn yapture_disconnect(
     db::set_setting(&state.db, "yapture_user_email", "")
         .await
         .map_err(|e| e.to_string())?;
-    // Clear tokens
+    // Clear persisted tokens from DB
+    db::set_setting(&state.db, "yapture_access_token", "")
+        .await
+        .map_err(|e| e.to_string())?;
+    db::set_setting(&state.db, "yapture_refresh_token", "")
+        .await
+        .map_err(|e| e.to_string())?;
+    // Clear in-memory tokens
     if let Ok(mut tokens) = state.yapture_tokens.lock() {
         *tokens = crate::state::YaptureTokens::default();
     }
@@ -530,4 +741,132 @@ pub async fn get_yapture_connection_status(
         user_name,
         user_email,
     })
+}
+
+/// Diagnostic: returns detailed permission + listener state for the text expander.
+/// Now only checks Accessibility (NSEvent-based listener doesn't need Input Monitoring).
+#[tauri::command]
+pub async fn get_expansion_diagnostics(
+    state: State<'_, Arc<AppState>>,
+) -> Result<ExpansionDiagnostics, String> {
+    let has_accessibility = tokio::task::spawn_blocking(|| {
+        macos_accessibility::check_permissions_robust()
+    })
+    .await
+    .unwrap_or(false);
+
+    #[cfg(target_os = "macos")]
+    let listener_active = crate::macos_listener::is_monitoring();
+    #[cfg(not(target_os = "macos"))]
+    let listener_active = true;
+
+    #[cfg(target_os = "macos")]
+    let event_count = crate::macos_listener::event_count();
+    #[cfg(not(target_os = "macos"))]
+    let event_count = 0u64;
+
+    let enabled = state.live_expansion_enabled.load(Ordering::Relaxed);
+    let trigger_count = state.trigger_cache.read().len();
+
+    Ok(ExpansionDiagnostics {
+        accessibility: has_accessibility,
+        listener_active,
+        event_count,
+        enabled,
+        trigger_count,
+    })
+}
+
+#[derive(serde::Serialize)]
+pub struct ExpansionDiagnostics {
+    pub accessibility: bool,
+    pub listener_active: bool,
+    pub event_count: u64,
+    pub enabled: bool,
+    pub trigger_count: usize,
+}
+
+/// Open macOS System Settings Accessibility pane.
+#[tauri::command]
+pub async fn open_privacy_settings(pane: String) -> Result<(), String> {
+    let url = match pane.as_str() {
+        "Accessibility" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+        // Keep ListenEvent for backward compatibility, but redirect to Accessibility
+        "ListenEvent" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+        _ => return Err(format!("Unknown pane: {}", pane)),
+    };
+
+    std::process::Command::new("open")
+        .arg(url)
+        .output()
+        .map_err(|e| format!("Failed to open settings: {}", e))?;
+
+    Ok(())
+}
+
+/// Copy text to the system clipboard using arboard (reliable in Tauri WebView).
+#[tauri::command]
+pub async fn copy_to_clipboard(text: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let mut clipboard = arboard::Clipboard::new().map_err(|e| format!("Clipboard init failed: {}", e))?;
+        clipboard.set_text(&text).map_err(|e| format!("Clipboard set failed: {}", e))
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking failed: {}", e))?
+}
+
+#[tauri::command]
+pub async fn get_yapture_sync_enabled(
+    state: State<'_, Arc<AppState>>,
+) -> Result<bool, String> {
+    let val = db::get_setting(&state.db, "yapture_bidirectional_sync")
+        .await
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|| "true".to_string());
+    Ok(val == "true")
+}
+
+#[tauri::command]
+pub async fn set_yapture_sync_enabled(
+    state: State<'_, Arc<AppState>>,
+    enabled: bool,
+) -> Result<(), String> {
+    db::set_setting(&state.db, "yapture_bidirectional_sync", if enabled { "true" } else { "false" })
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Test text injection by simulating a small paste. Returns a diagnostic message.
+#[tauri::command]
+pub async fn test_text_injection() -> Result<String, String> {
+    let result = tokio::task::spawn_blocking(|| {
+        // Test 1: Can we create an enigo instance?
+        let enigo = match enigo::Enigo::new(&enigo::Settings::default()) {
+            Ok(e) => e,
+            Err(e) => return format!("FAIL: Cannot create enigo: {:?}. Ensure Accessibility is enabled in System Settings > Privacy & Security > Accessibility.", e),
+        };
+        drop(enigo);
+
+        // Test 2: Can we access the clipboard?
+        match arboard::Clipboard::new() {
+            Ok(_) => {},
+            Err(e) => return format!("FAIL: Clipboard access failed: {:?}", e),
+        }
+
+        // Test 3: Report event count if on macOS
+        #[cfg(target_os = "macos")]
+        {
+            let count = crate::macos_listener::event_count();
+            let monitoring = crate::macos_listener::is_monitoring();
+            return format!("OK: Text injection working. Listener: {} (events: {})",
+                if monitoring { "active" } else { "inactive" }, count);
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        "OK: Text injection is working.".to_string()
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking failed: {}", e))?;
+
+    Ok(result)
 }

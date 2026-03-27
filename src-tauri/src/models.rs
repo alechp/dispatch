@@ -15,6 +15,7 @@ pub struct Notification {
     pub is_read: i32,
     pub created_at: String,
     pub read_at: Option<String>,
+    pub yapture_task_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -113,4 +114,19 @@ pub struct VariableDef {
     pub var_type: String,
     #[serde(default)]
     pub params: std::collections::HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HotkeyBinding {
+    pub action: String,
+    pub keys: Vec<String>,
+    pub enabled: bool,
+    pub scope: String,
+    pub category: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HotkeyConfig {
+    pub bindings: Vec<HotkeyBinding>,
 }

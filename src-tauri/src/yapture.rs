@@ -23,14 +23,32 @@ pub struct YaptureConfigResponse {
 pub async fn load_config(pool: &sqlx::SqlitePool, service_token: Option<String>) -> Option<YaptureConfig> {
     let enabled = crate::db::get_setting(pool, "yapture_enabled").await.ok()?;
     if enabled.as_deref() != Some("1") {
+        crate::log::log(&format!("[yapture] load_config: not enabled (yapture_enabled={:?})", enabled));
         return None;
     }
-    let api_url = crate::db::get_setting(pool, "yapture_api_url").await.ok()??;
-    let user_id = crate::db::get_setting(pool, "yapture_user_id").await.ok()??;
-    let service_token = service_token?;
-    if api_url.is_empty() || user_id.is_empty() || service_token.is_empty() {
-        return None;
-    }
+    let api_url = match crate::db::get_setting(pool, "yapture_api_url").await.ok()? {
+        Some(url) if !url.is_empty() => url,
+        other => {
+            crate::log::log(&format!("[yapture] load_config: no api_url ({:?})", other));
+            return None;
+        }
+    };
+    let user_id = match crate::db::get_setting(pool, "yapture_user_id").await.ok()? {
+        Some(uid) if !uid.is_empty() => uid,
+        other => {
+            crate::log::log(&format!("[yapture] load_config: no user_id ({:?})", other));
+            return None;
+        }
+    };
+    let service_token = match service_token {
+        Some(t) if !t.is_empty() => t,
+        _ => {
+            crate::log::log("[yapture] load_config: no access token in memory");
+            return None;
+        }
+    };
+    crate::log::log(&format!("[yapture] load_config: OK — api_url={}, user_id={}, token={}...",
+        api_url, user_id, &service_token[..service_token.len().min(12)]));
     Some(YaptureConfig {
         enabled: true,
         api_url,
@@ -43,6 +61,7 @@ pub async fn load_config(pool: &sqlx::SqlitePool, service_token: Option<String>)
 pub async fn push_notification(
     config: &YaptureConfig,
     notification: &crate::models::Notification,
+    db: Option<&sqlx::SqlitePool>,
 ) {
     let client = reqwest::Client::new();
     let project = notification
@@ -50,15 +69,32 @@ pub async fn push_notification(
         .as_deref()
         .unwrap_or(&notification.source);
 
-    // Build task text: "[project] title" (append body if present, truncate to 500 chars)
-    let mut text = format!("[{}] {}", project, notification.title);
+    // Build task text: "[project] title" (append body if present)
+    let mut text = format!("#@dispatch [{}] {}", project, notification.title);
     if let Some(body) = &notification.body {
         text.push_str(": ");
         text.push_str(body);
     }
-    if text.len() > 500 {
-        text.truncate(500);
+
+    // Append deep link for tmux terminal focus (clickable from Yapture)
+    if let Some(session) = &notification.tmux_session {
+        let mut deep_link = format!("dispatch://focus-terminal?session={}&nid={}", urlencoding::encode(session), urlencoding::encode(&notification.id));
+        if let Some(w) = &notification.tmux_window {
+            deep_link.push_str(&format!("&window={}", urlencoding::encode(w)));
+        }
+        if let Some(p) = &notification.tmux_pane {
+            deep_link.push_str(&format!("&pane={}", urlencoding::encode(p)));
+        }
+        text.push(' ');
+        text.push_str(&deep_link);
     }
+
+    if text.len() > 800 {
+        text.truncate(800);
+    }
+
+    // Use Bearer token (OAuth access token)
+    let auth_header = format!("Bearer {}", config.service_token);
 
     // 1. Create task
     let task_url = format!("{}/api/tasks", config.api_url);
@@ -69,10 +105,7 @@ pub async fn push_notification(
 
     let task_result = client
         .post(&task_url)
-        .header(
-            "Authorization",
-            format!("ServiceToken {}", config.service_token),
-        )
+        .header("Authorization", &auth_header)
         .header("X-User-ID", &config.user_id)
         .json(&task_body)
         .send()
@@ -86,20 +119,30 @@ pub async fn push_notification(
                     .and_then(|i| i.as_str())
                     .unwrap_or("")
                     .to_string();
-                eprintln!("[yapture] task created: {}", id);
+                crate::log::log(&format!("[yapture] task created: {}", id));
+                // Store yapture task ID for bidirectional sync
+                if let Some(pool) = db {
+                    if !id.is_empty() {
+                        if let Err(e) = crate::db::set_yapture_task_id(pool, &notification.id, &id).await {
+                            crate::log::log(&format!("[yapture] failed to store task_id: {}", e));
+                        }
+                    }
+                }
                 id
             }
             Err(e) => {
-                eprintln!("[yapture] failed to parse task response: {}", e);
+                crate::log::log(&format!("[yapture] failed to parse task response: {}", e));
                 return;
             }
         },
         Ok(resp) => {
-            eprintln!("[yapture] task creation failed: {}", resp.status());
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            crate::log::log(&format!("[yapture] task creation failed ({}): {}", status, body));
             return;
         }
         Err(e) => {
-            eprintln!("[yapture] task creation error: {}", e);
+            crate::log::log(&format!("[yapture] task creation error: {}", e));
             return;
         }
     };
@@ -119,36 +162,58 @@ pub async fn push_notification(
 
     match client
         .post(&webhook_url)
-        .header(
-            "Authorization",
-            format!("ServiceToken {}", config.service_token),
-        )
+        .header("Authorization", &auth_header)
         .json(&webhook_body)
         .send()
         .await
     {
         Ok(resp) if resp.status().is_success() => {
-            eprintln!("[yapture] webhook notification sent");
+            crate::log::log("[yapture] webhook notification sent");
         }
         Ok(resp) => {
-            eprintln!("[yapture] webhook failed: {}", resp.status());
+            crate::log::log(&format!("[yapture] webhook failed: {}", resp.status()));
         }
         Err(e) => {
-            eprintln!("[yapture] webhook error: {}", e);
+            crate::log::log(&format!("[yapture] webhook error: {}", e));
         }
     }
 }
 
-/// Test connection to Yapture API
-pub async fn test_connection(api_url: &str, service_token: &str) -> bool {
+/// Complete a Yapture task (bidirectional sync). Fire-and-forget safe.
+pub async fn complete_yapture_task(config: &YaptureConfig, yapture_task_id: &str) -> Result<(), String> {
     let client = reqwest::Client::new();
-    let url = format!("{}/api/webhooks/capswan/health", api_url);
+    let url = format!("{}/api/tasks/{}", config.api_url, yapture_task_id);
+    let auth = format!("Bearer {}", config.service_token);
+
+    let resp = client
+        .patch(&url)
+        .header("Authorization", &auth)
+        .header("X-User-ID", &config.user_id)
+        .json(&serde_json::json!({ "completed": true }))
+        .send()
+        .await
+        .map_err(|e| format!("Yapture PATCH failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Yapture returned {} completing task: {}", status, body));
+    }
+    crate::log::log(&format!("[yapture-sync] completed task {}", yapture_task_id));
+    Ok(())
+}
+
+/// Test connection to Yapture API using the OAuth access token.
+/// Calls /api/userinfo which requires a valid Bearer token.
+pub async fn test_connection(api_url: &str, access_token: &str) -> bool {
+    if access_token.is_empty() {
+        return false;
+    }
+    let client = reqwest::Client::new();
+    let url = format!("{}/api/userinfo", api_url);
     match client
         .get(&url)
-        .header(
-            "Authorization",
-            format!("ServiceToken {}", service_token),
-        )
+        .header("Authorization", format!("Bearer {}", access_token))
         .send()
         .await
     {

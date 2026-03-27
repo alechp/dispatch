@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { NotificationResponse, ProjectSession, QueryFilters } from "./types";
+import type { NotificationResponse, ProjectSession, QueryFilters, HotkeyConfig } from "./types";
 
 export async function getNotifications(
   filters: QueryFilters = {}
@@ -27,8 +27,8 @@ export async function getUnreadCount(): Promise<number> {
   return invoke("get_unread_count");
 }
 
-export async function focusTerminal(session: string, window?: string, pane?: string): Promise<void> {
-  return invoke("focus_terminal", { session, window: window ?? null, pane: pane ?? null });
+export async function focusTerminal(session: string, window?: string, pane?: string, notificationId?: string): Promise<void> {
+  return invoke("focus_terminal", { session, window: window ?? null, pane: pane ?? null, notificationId: notificationId ?? null });
 }
 
 export async function getProjectSessions(search?: string): Promise<ProjectSession[]> {
@@ -47,4 +47,20 @@ export async function updateProjectMetadata(
     directory: directory ?? null,
     gitRemote: gitRemote ?? null,
   });
+}
+
+export async function getHotkeyConfig(): Promise<HotkeyConfig> {
+  return invoke("get_hotkey_config");
+}
+
+export async function setHotkeyConfig(config: HotkeyConfig): Promise<void> {
+  return invoke("set_hotkey_config", { config });
+}
+
+export async function getYaptureSyncEnabled(): Promise<boolean> {
+  return invoke("get_yapture_sync_enabled");
+}
+
+export async function setYaptureSyncEnabled(enabled: boolean): Promise<void> {
+  return invoke("set_yapture_sync_enabled", { enabled });
 }

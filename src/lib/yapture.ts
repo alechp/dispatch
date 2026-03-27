@@ -46,3 +46,8 @@ export async function yaptureDisconnect(): Promise<void> {
 export async function getYaptureConnectionStatus(): Promise<YaptureConnectionStatus> {
   return invoke("get_yapture_connection_status");
 }
+
+/** Refresh the Yapture access token using the stored refresh token. Returns true on success. */
+export async function yaptureRefresh(): Promise<boolean> {
+  return invoke("yapture_refresh");
+}

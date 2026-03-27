@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { useSnippets } from "../hooks/useSnippets";
+import { useToast } from "../hooks/useToast";
 import {
   createSnippet,
   updateSnippet,
@@ -10,9 +11,13 @@ import {
 import {
   getLiveExpansionEnabled,
   setLiveExpansionEnabled,
-  checkAccessibilityPermission,
   requestAccessibilityPermission,
+  getExpansionDiagnostics,
+  openPrivacySettings,
+  testTextInjection,
+  copyToClipboard,
 } from "../lib/liveExpansion";
+import type { ExpansionDiagnostics } from "../lib/liveExpansion";
 import type { Snippet, SnippetVariable } from "../lib/types";
 
 interface SnippetManagerProps {
@@ -83,15 +88,18 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
     refresh();
   }, [refresh]);
 
+  const { showToast } = useToast();
+
   const handleExport = useCallback(async () => {
     try {
       const data = await exportSnippets();
       const json = JSON.stringify(data, null, 2);
-      await navigator.clipboard.writeText(json);
+      await copyToClipboard(json);
+      showToast("Exported to clipboard");
     } catch (err) {
       console.error("Export failed:", err);
     }
-  }, []);
+  }, [showToast]);
 
   const handleImportSubmit = useCallback(
     async (json: string) => {
@@ -214,39 +222,68 @@ function SnippetRow({
   onClick: () => void;
 }) {
   const tags = parseTags(snippet.tags);
+  const [copied, setCopied] = useState(false);
+  const { showToast } = useToast();
+
+  const handleCopy = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      try {
+        const { expandSnippet } = await import("../lib/snippets");
+        const expanded = await expandSnippet(snippet.id);
+        await copyToClipboard(expanded);
+        setCopied(true);
+        showToast("Copied to clipboard");
+        setTimeout(() => setCopied(false), 1500);
+      } catch (err) {
+        console.error("Copy failed:", err);
+      }
+    },
+    [snippet.id, showToast]
+  );
 
   return (
-    <button
-      onClick={onClick}
-      className="w-full text-left px-4 py-3 border-b border-border-subtle hover:bg-surface-raised transition-colors"
-    >
-      <div className="flex items-center gap-2 mb-1">
-        <span className="text-sm font-mono text-accent">{snippet.trigger}</span>
-        {snippet.label && (
-          <span className="text-xs text-text-secondary truncate">
-            {snippet.label}
-          </span>
-        )}
-      </div>
-      <p className="text-xs font-mono text-text-tertiary line-clamp-2 mb-1">
-        {snippet.body}
-      </p>
-      <div className="flex items-center gap-2">
-        {tags.map((tag) => (
-          <span
-            key={tag}
-            className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-surface-overlay text-text-tertiary"
-          >
-            {tag}
-          </span>
-        ))}
-        {snippet.use_count > 0 && (
-          <span className="text-[10px] text-text-tertiary ml-auto">
-            used {snippet.use_count}x
-          </span>
-        )}
-      </div>
-    </button>
+    <div className="relative group">
+      <button
+        onClick={onClick}
+        className="w-full text-left px-4 py-3 border-b border-border-subtle hover:bg-surface-raised transition-colors"
+      >
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-sm font-mono text-accent">{snippet.trigger}</span>
+          {snippet.label && (
+            <span className="text-xs text-text-secondary truncate">
+              {snippet.label}
+            </span>
+          )}
+        </div>
+        <p className="text-xs font-mono text-text-tertiary line-clamp-2 mb-1">
+          {snippet.body}
+        </p>
+        <div className="flex items-center gap-2">
+          {tags.map((tag) => (
+            <span
+              key={tag}
+              className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-surface-overlay text-text-tertiary"
+            >
+              {tag}
+            </span>
+          ))}
+          {snippet.use_count > 0 && (
+            <span className="text-[10px] text-text-tertiary ml-auto">
+              used {snippet.use_count}x
+            </span>
+          )}
+        </div>
+      </button>
+      {/* Copy button overlay */}
+      <button
+        onClick={handleCopy}
+        className="absolute top-3 right-3 p-1.5 rounded-md bg-surface-overlay border border-border-subtle text-text-tertiary hover:text-accent hover:border-accent/30 opacity-0 group-hover:opacity-100 transition-all"
+        title="Copy expanded snippet"
+      >
+        {copied ? <CheckIcon /> : <CopyIcon />}
+      </button>
+    </div>
   );
 }
 
@@ -368,9 +405,7 @@ function SnippetEditView({
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
         {/* Trigger */}
         <div>
-          <label className="block text-xs font-semibold text-text-secondary mb-1">
-            Trigger
-          </label>
+          <FieldLabel label="Trigger" value={trigger} />
           <input
             type="text"
             value={trigger}
@@ -382,9 +417,7 @@ function SnippetEditView({
 
         {/* Label */}
         <div>
-          <label className="block text-xs font-semibold text-text-secondary mb-1">
-            Label
-          </label>
+          <FieldLabel label="Label" value={label} />
           <input
             type="text"
             value={label}
@@ -396,9 +429,7 @@ function SnippetEditView({
 
         {/* Body */}
         <div>
-          <label className="block text-xs font-semibold text-text-secondary mb-1">
-            Body
-          </label>
+          <FieldLabel label="Body" value={body} />
           <textarea
             value={body}
             onChange={(e) => setBody(e.target.value)}
@@ -469,9 +500,7 @@ function SnippetEditView({
 
         {/* Tags */}
         <div>
-          <label className="block text-xs font-semibold text-text-secondary mb-1">
-            Tags
-          </label>
+          <FieldLabel label="Tags" value={tagsInput} />
           <input
             type="text"
             value={tagsInput}
@@ -895,63 +924,224 @@ function ImportModal({
 
 function LiveExpansionToggle() {
   const [enabled, setEnabled] = useState(false);
-  const [hasPermission, setHasPermission] = useState(true);
+  const [diag, setDiag] = useState<ExpansionDiagnostics | null>(null);
   const [loading, setLoading] = useState(true);
+  const [testResult, setTestResult] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const [isEnabled, hasPerm] = await Promise.all([
-          getLiveExpansionEnabled(),
-          checkAccessibilityPermission(),
-        ]);
-        setEnabled(isEnabled);
-        setHasPermission(hasPerm);
-      } catch {
-        // ignore
-      } finally {
-        setLoading(false);
-      }
-    })();
+  const refreshDiagnostics = useCallback(async () => {
+    try {
+      const [isEnabled, diagnostics] = await Promise.all([
+        getLiveExpansionEnabled(),
+        getExpansionDiagnostics(),
+      ]);
+      setEnabled(isEnabled);
+      setDiag(diagnostics);
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
+  useEffect(() => {
+    refreshDiagnostics();
+  }, [refreshDiagnostics]);
+
   const handleToggle = useCallback(async () => {
-    if (!hasPermission) {
-      const granted = await requestAccessibilityPermission();
-      setHasPermission(granted);
-      if (!granted) return;
+    if (diag && !diag.accessibility) {
+      await requestAccessibilityPermission();
+      // Refresh after user potentially grants permission
+      setTimeout(refreshDiagnostics, 1000);
+      return;
     }
     const newValue = !enabled;
-    setEnabled(newValue);
-    await setLiveExpansionEnabled(newValue);
-  }, [enabled, hasPermission]);
+    try {
+      await setLiveExpansionEnabled(newValue);
+      setEnabled(newValue);
+      refreshDiagnostics();
+    } catch (err) {
+      console.error("[LiveExpansion] toggle failed:", err);
+    }
+  }, [enabled, diag, refreshDiagnostics]);
+
+  const handleTest = useCallback(async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await testTextInjection();
+      setTestResult(result);
+    } catch (err) {
+      setTestResult(`Error: ${err}`);
+    } finally {
+      setTesting(false);
+    }
+  }, []);
 
   if (loading) return null;
 
+  const hasAccess = diag?.accessibility ?? false;
+  const listenerActive = diag?.listener_active ?? false;
+  const eventCount = diag?.event_count ?? 0;
+  const triggerCount = diag?.trigger_count ?? 0;
+  const allGood = hasAccess && listenerActive;
+
   return (
-    <div className="flex items-center justify-between px-4 py-2 border-b border-border-subtle bg-surface-raised/50">
-      <div className="flex items-center gap-2">
+    <div className="px-4 py-3 border-b border-border-subtle bg-surface-raised/50 space-y-2">
+      {/* Toggle row */}
+      <div className="flex items-center justify-between">
         <span className="text-xs font-medium text-text-secondary">
           Live Expansion
         </span>
-        {!hasPermission && (
-          <span className="text-[10px] text-warning">
-            Needs Input Monitoring permission
-          </span>
+        <button
+          onClick={handleToggle}
+          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${
+            enabled
+              ? "bg-accent"
+              : "bg-surface-overlay border border-border-subtle"
+          }`}
+        >
+          <span
+            className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${
+              enabled ? "translate-x-4" : "translate-x-0.5"
+            }`}
+          />
+        </button>
+      </div>
+
+      {/* Permission checklist */}
+      <div className="space-y-1">
+        <PermissionRow
+          label="Accessibility"
+          description="Keyboard listener + text injection"
+          granted={hasAccess}
+          onOpenSettings={() => openPrivacySettings("Accessibility")}
+        />
+        {hasAccess && enabled && (
+          <div className="flex items-center gap-2">
+            <span
+              className={`text-[11px] ${listenerActive ? "text-success" : "text-warning"}`}
+            >
+              {listenerActive ? "\u2713" : "\u25CB"}
+            </span>
+            <span className="text-[11px] text-text-secondary">
+              Keyboard listener
+              <span className="text-text-tertiary ml-1">
+                — {listenerActive ? "active" : "waiting for permission (retrying...)"}
+              </span>
+            </span>
+          </div>
         )}
       </div>
-      <button
-        onClick={handleToggle}
-        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-          enabled ? "bg-accent" : "bg-surface-overlay border border-border-subtle"
-        }`}
-      >
-        <span
-          className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${
-            enabled ? "translate-x-4" : "translate-x-0.5"
+
+      {/* Status line */}
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] text-text-tertiary">
+          {!enabled
+            ? "Disabled"
+            : allGood
+              ? `Listening — ${triggerCount} trigger${triggerCount !== 1 ? "s" : ""} loaded — ${eventCount} events`
+              : !hasAccess
+                ? "Grant Accessibility permission to enable keyboard listener"
+                : "Waiting for keyboard listener to start..."}
+        </span>
+        {enabled && (
+          <button
+            onClick={handleTest}
+            disabled={testing}
+            className="text-[10px] text-accent hover:text-accent-hover transition-colors disabled:opacity-50"
+          >
+            {testing ? "Testing..." : "Test Injection"}
+          </button>
+        )}
+        <button
+          onClick={refreshDiagnostics}
+          className="text-[10px] text-text-tertiary hover:text-text-secondary transition-colors ml-auto"
+        >
+          Refresh
+        </button>
+      </div>
+
+      {/* Test result */}
+      {testResult && (
+        <div
+          className={`text-[10px] px-2 py-1.5 rounded ${
+            testResult.startsWith("OK")
+              ? "bg-success/10 text-success"
+              : "bg-error/10 text-error"
           }`}
-        />
-      </button>
+        >
+          {testResult}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PermissionRow({
+  label,
+  description,
+  granted,
+  onOpenSettings,
+}: {
+  label: string;
+  description: string;
+  granted: boolean;
+  onOpenSettings: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span
+        className={`text-[11px] ${granted ? "text-success" : "text-error"}`}
+      >
+        {granted ? "\u2713" : "\u2717"}
+      </span>
+      <span className="text-[11px] text-text-secondary flex-1">
+        {label}
+        <span className="text-text-tertiary ml-1">— {description}</span>
+      </span>
+      {!granted && (
+        <button
+          onClick={onOpenSettings}
+          className="text-[10px] text-accent hover:text-accent-hover transition-colors shrink-0"
+        >
+          Open Settings
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// FieldLabel — label with inline copy button
+// ---------------------------------------------------------------------------
+
+function FieldLabel({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+  const { showToast } = useToast();
+
+  const handleCopy = useCallback(async () => {
+    if (!value) return;
+    await copyToClipboard(value);
+    setCopied(true);
+    showToast("Copied to clipboard");
+    setTimeout(() => setCopied(false), 1500);
+  }, [value, showToast]);
+
+  return (
+    <div className="flex items-center justify-between mb-1">
+      <label className="text-xs font-semibold text-text-secondary">
+        {label}
+      </label>
+      {value && (
+        <button
+          onClick={handleCopy}
+          className="p-0.5 text-text-tertiary hover:text-accent transition-colors"
+          title={`Copy ${label.toLowerCase()}`}
+        >
+          {copied ? <CheckIcon /> : <CopyIcon />}
+        </button>
+      )}
     </div>
   );
 }
@@ -959,6 +1149,42 @@ function LiveExpansionToggle() {
 // ---------------------------------------------------------------------------
 // Icons
 // ---------------------------------------------------------------------------
+
+function CopyIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="text-success"
+    >
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  );
+}
 
 function ChevronLeftIcon() {
   return (

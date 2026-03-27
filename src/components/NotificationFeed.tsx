@@ -9,6 +9,7 @@ interface NotificationFeedProps {
   onDelete: (id: string) => void;
   onFocusTerminal: (id: string, session: string, window: string | null, pane: string | null) => void;
   selectedIndex: number | null;
+  visualSelections?: Set<string>;
 }
 
 export function NotificationFeed({
@@ -18,6 +19,7 @@ export function NotificationFeed({
   onDelete,
   onFocusTerminal,
   selectedIndex,
+  visualSelections,
 }: NotificationFeedProps) {
   if (loading) {
     return (
@@ -41,6 +43,7 @@ export function NotificationFeed({
           onDelete={onDelete}
           onFocusTerminal={onFocusTerminal}
           isSelected={i === selectedIndex}
+          isVisualSelected={visualSelections?.has(n.id) ?? false}
           index={i}
         />
       ))}

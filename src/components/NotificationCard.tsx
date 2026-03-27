@@ -7,6 +7,7 @@ interface NotificationCardProps {
   onDelete: (id: string) => void;
   onFocusTerminal: (id: string, session: string, window: string | null, pane: string | null) => void;
   isSelected?: boolean;
+  isVisualSelected?: boolean;
   index: number;
 }
 
@@ -43,6 +44,7 @@ export function NotificationCard({
   onDelete,
   onFocusTerminal,
   isSelected = false,
+  isVisualSelected = false,
   index,
 }: NotificationCardProps) {
   const isUnread = n.is_read === 0;
@@ -58,22 +60,32 @@ export function NotificationCard({
     <div
       ref={cardRef}
       className={`group relative px-4 py-3 border-b border-border-subtle transition-colors ${
-        isSelected
-          ? "bg-accent/10 border-l-2 border-l-accent"
-          : isUnread
-            ? "bg-surface-raised"
-            : "bg-surface"
+        isVisualSelected
+          ? "bg-accent/20 border-l-2 border-l-warning"
+          : isSelected
+            ? "bg-accent/10 border-l-2 border-l-accent"
+            : isUnread
+              ? "bg-surface-raised"
+              : "bg-surface"
       } hover:bg-surface-overlay`}
       onClick={() => isUnread && onMarkRead(n.id)}
     >
       <div className="flex items-start gap-3">
         {/* Index + unread indicator */}
         <div className="flex flex-col items-center shrink-0 pt-0.5" style={{ minWidth: 16 }}>
-          <div
-            className={`w-2 h-2 rounded-full ${
-              isUnread ? eventColor(n.event_type) : "bg-transparent"
-            }`}
-          />
+          {isVisualSelected ? (
+            <div className="w-3.5 h-3.5 rounded border border-accent bg-accent flex items-center justify-center">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            </div>
+          ) : (
+            <div
+              className={`w-2 h-2 rounded-full ${
+                isUnread ? eventColor(n.event_type) : "bg-transparent"
+              }`}
+            />
+          )}
           <span className="text-[9px] text-text-tertiary mt-0.5 leading-none">{index + 1}</span>
         </div>
 

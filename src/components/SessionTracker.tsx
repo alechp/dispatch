@@ -255,6 +255,25 @@ function SessionRow({
           {session.error_count} errors
         </span>
       </div>
+
+      {/* Row 4: directory + tmux */}
+      {(session.directory || session.last_tmux_session) && (
+        <div className="flex items-center gap-2 mt-1.5">
+          {session.directory && (
+            <div className="flex items-center gap-1 text-[11px] text-text-secondary min-w-0">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              </svg>
+              <span className="truncate">{formatDirectory(session.directory)}</span>
+            </div>
+          )}
+          {session.last_tmux_session && (
+            <span className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-surface-overlay text-text-tertiary shrink-0">
+              tmux: {session.last_tmux_session}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -298,11 +317,16 @@ function ProjectCard({
         </span>
       </div>
 
-      {/* Source badge */}
-      <div className="mt-1">
+      {/* Source + tmux badge */}
+      <div className="flex items-center gap-1 mt-1">
         <span className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-surface-overlay text-text-tertiary">
           {session.source}
         </span>
+        {session.last_tmux_session && (
+          <span className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-accent/10 text-accent">
+            tmux: {session.last_tmux_session}
+          </span>
+        )}
       </div>
 
       {/* Metadata section */}

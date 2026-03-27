@@ -30,7 +30,7 @@ const c = colors;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type Mode = "run" | "dev" | "build" | "test" | "install" | "health" | "clean";
+type Mode = "run" | "dev" | "build" | "test" | "deps" | "install" | "health" | "clean";
 
 // ── Runner ───────────────────────────────────────────────────────────────────
 
@@ -159,7 +159,7 @@ class DispatchRunner {
 
   private async modeBuild() {
     await this.validateEnv();
-    await this.run("Building production release", "bun run tauri build");
+    await this.run("Building production release", "bunx @tauri-apps/cli build --bundles app");
   }
 
   private async modeTest() {
@@ -179,12 +179,70 @@ class DispatchRunner {
     }
   }
 
-  private async modeInstall() {
+  private async modeDeps() {
     await this.run("Installing JS dependencies", "bun install");
     await this.run(
       "Fetching Cargo dependencies",
       "cargo fetch --manifest-path src-tauri/Cargo.toml"
     );
+  }
+
+  private async modeInstall() {
+    await this.validateEnv();
+    this.logStep("Building and installing Dispatch.app to /Applications");
+
+    // Step 1: Build the release .app bundle (skip DMG to avoid intermittent failures)
+    if (!(await this.run("Building release bundle", "bunx @tauri-apps/cli build --bundles app"))) {
+      this.logError("Build failed — cannot install");
+      return;
+    }
+
+    // Step 2: Find the .app bundle
+    const bundleDir = resolve(this.projectRoot, "src-tauri/target/release/bundle/macos");
+    const appName = "Dispatch.app";
+    const sourcePath = resolve(bundleDir, appName);
+    const destPath = `/Applications/${appName}`;
+
+    try {
+      const stat = await Bun.file(resolve(sourcePath, "Contents/Info.plist")).exists();
+      if (!stat) {
+        this.logError(`App bundle not found at ${sourcePath}`);
+        return;
+      }
+    } catch {
+      this.logError(`App bundle not found at ${sourcePath}`);
+      return;
+    }
+
+    // Step 3: Check if already installed
+    const existingApp = await Bun.file(resolve(destPath, "Contents/Info.plist")).exists();
+    if (existingApp) {
+      this.logWarning(`${destPath} already exists — it will be replaced`);
+      // Kill the running app first if any
+      await $`pkill -f "Dispatch.app" 2>/dev/null`.cwd(this.projectRoot).nothrow();
+      await $`sleep 1`.nothrow();
+      if (!(await this.run("Removing old installation", `rm -rf "${destPath}"`))) {
+        this.logError("Failed to remove old installation. Try: sudo rm -rf /Applications/Dispatch.app");
+        return;
+      }
+    }
+
+    // Step 4: Copy to /Applications
+    if (!(await this.run("Copying to /Applications", `cp -R "${sourcePath}" "${destPath}"`))) {
+      this.logError("Copy failed. You may need to run with sudo or copy manually:");
+      this.log(`  ${c.dim}cp -R "${sourcePath}" /Applications/${c.reset}`);
+      return;
+    }
+
+    this.logSuccess(`Installed to ${destPath}`);
+
+    // Step 5: Open the app so macOS registers it for permissions
+    this.logStep("Launching Dispatch for first-time permission setup");
+    this.log(`  ${c.dim}macOS will prompt for Input Monitoring permission on first use.${c.reset}`);
+    this.log(`  ${c.dim}Grant access in: System Settings > Privacy & Security > Input Monitoring${c.reset}`);
+    await $`open "${destPath}"`.cwd(this.projectRoot).nothrow();
+
+    this.logSuccess("Installation complete");
   }
 
   private async modeHealth() {
@@ -244,7 +302,8 @@ class DispatchRunner {
     console.log(`    ${c.green}dev${c.reset}       Start tauri dev (hot reload)`);
     console.log(`    ${c.green}build${c.reset}     Compile release binary`);
     console.log(`    ${c.green}test${c.reset}      Cargo test + TypeScript check`);
-    console.log(`    ${c.green}install${c.reset}   bun install + cargo fetch`);
+    console.log(`    ${c.green}deps${c.reset}      bun install + cargo fetch`);
+    console.log(`    ${c.green}install${c.reset}   Build + install .app to /Applications`);
     console.log(`    ${c.green}health${c.reset}    Ping :9394/health, check processes`);
     console.log(`    ${c.green}clean${c.reset}     Remove target/, dist/, node_modules/`);
     console.log();
@@ -263,9 +322,10 @@ class DispatchRunner {
       { key: "2", mode: "dev" as Mode, label: "Dev Mode", desc: "Start tauri dev (hot reload)" },
       { key: "3", mode: "build" as Mode, label: "Build Production", desc: "Compile release binary" },
       { key: "4", mode: "test" as Mode, label: "Run Tests", desc: "Cargo test + TypeScript check" },
-      { key: "5", mode: "install" as Mode, label: "Install Dependencies", desc: "bun install + cargo fetch" },
-      { key: "6", mode: "health" as Mode, label: "Health Check", desc: "Ping :9394/health, check processes" },
-      { key: "7", mode: "clean" as Mode, label: "Clean", desc: "Remove target/, dist/, node_modules/" },
+      { key: "5", mode: "deps" as Mode, label: "Install Dependencies", desc: "bun install + cargo fetch" },
+      { key: "6", mode: "install" as Mode, label: "Install to System", desc: "Build + copy to /Applications" },
+      { key: "7", mode: "health" as Mode, label: "Health Check", desc: "Ping :9394/health, check processes" },
+      { key: "8", mode: "clean" as Mode, label: "Clean", desc: "Remove target/, dist/, node_modules/" },
     ];
 
     for (const item of items) {
@@ -300,6 +360,8 @@ class DispatchRunner {
         return this.modeBuild();
       case "test":
         return this.modeTest();
+      case "deps":
+        return this.modeDeps();
       case "install":
         return this.modeInstall();
       case "health":
@@ -327,7 +389,7 @@ class DispatchRunner {
     }
 
     const modeArg = args.find((a) => a.startsWith("--mode="));
-    const validModes: Mode[] = ["run", "dev", "build", "test", "install", "health", "clean"];
+    const validModes: Mode[] = ["run", "dev", "build", "test", "deps", "install", "health", "clean"];
 
     if (modeArg) {
       const mode = modeArg.split("=")[1] as Mode;

@@ -55,10 +55,13 @@ pub fn start_listener(
                             return;
                         }
 
-                        // Map key to character directly — do NOT use event.name as it calls
-                        // TSMGetInputSourceProperty which must run on the main thread and
-                        // causes EXC_BREAKPOINT (SIGTRAP) when called from a background thread.
-                        if let Some(ch) = key_to_char(key) {
+                        // Use event.name for the actual typed character (handles shift,
+                        // keyboard layouts, etc.). This is safe on Linux/Windows — the TSM
+                        // crash only affects macOS, which now uses macos_listener instead.
+                        let ch = event.name.as_deref()
+                            .and_then(|s| s.chars().next())
+                            .or_else(|| key_to_char(key));
+                        if let Some(ch) = ch {
                             buffer.push(ch);
 
                             // Trim buffer if too long — must respect char boundaries

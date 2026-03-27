@@ -1051,6 +1051,7 @@ dependencies = [
  "arboard",
  "axum",
  "base64 0.22.1",
+ "cc",
  "chrono",
  "crossbeam-channel",
  "enigo",

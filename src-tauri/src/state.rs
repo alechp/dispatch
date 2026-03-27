@@ -1,5 +1,6 @@
 use parking_lot::RwLock;
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -14,6 +15,8 @@ pub struct AppState {
     pub trigger_cache: Arc<RwLock<Vec<TriggerEntry>>>,
     pub oauth_pending: std::sync::Mutex<Option<crate::yapture::OAuthState>>,
     pub yapture_tokens: std::sync::Mutex<YaptureTokens>,
+    /// Maps global shortcut string (e.g. "CommandOrControl+Shift+D") → action name
+    pub global_shortcut_map: Arc<RwLock<HashMap<String, String>>>,
 }
 
 #[derive(Default)]
@@ -33,6 +36,7 @@ impl AppState {
             trigger_cache: Arc::new(RwLock::new(Vec::new())),
             oauth_pending: std::sync::Mutex::new(None),
             yapture_tokens: std::sync::Mutex::new(YaptureTokens::default()),
+            global_shortcut_map: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }

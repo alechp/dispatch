@@ -12,6 +12,7 @@ export interface Notification {
   is_read: number;
   created_at: string;
   read_at: string | null;
+  yapture_task_id: string | null;
 }
 
 export interface NotificationResponse {
@@ -65,4 +66,17 @@ export interface SnippetVariable {
   name: string;
   type: "echo" | "date" | "clipboard" | "shell" | "form" | "choice" | "random";
   params: Record<string, unknown>;
+}
+
+export interface HotkeyBinding {
+  action: string;
+  keys: string[];
+  enabled: boolean;
+  scope: "global" | "app";
+  category: string;
+  description: string;
+}
+
+export interface HotkeyConfig {
+  bindings: HotkeyBinding[];
 }

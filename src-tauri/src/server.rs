@@ -73,9 +73,16 @@ async fn create_notification(
     let yapture_token = state.yapture_tokens.lock()
         .ok()
         .and_then(|t| t.service_token.clone());
+    crate::log::log(&format!("[yapture] push: token present={}", yapture_token.as_ref().map(|t| !t.is_empty()).unwrap_or(false)));
     tokio::spawn(async move {
-        if let Some(config) = crate::yapture::load_config(&yapture_pool, yapture_token).await {
-            crate::yapture::push_notification(&config, &yapture_notification).await;
+        match crate::yapture::load_config(&yapture_pool, yapture_token).await {
+            Some(config) => {
+                crate::log::log(&format!("[yapture] push: config loaded, pushing notification '{}'", yapture_notification.title));
+                crate::yapture::push_notification(&config, &yapture_notification, Some(&yapture_pool)).await;
+            }
+            None => {
+                crate::log::log("[yapture] push: skipped — load_config returned None");
+            }
         }
     });
 
