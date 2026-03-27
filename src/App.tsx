@@ -20,7 +20,8 @@ import { ExpanderPalette } from "./components/ExpanderPalette";
 import { YaptureSettings } from "./components/YaptureSettings";
 import { NotificationBanner } from "./components/NotificationBanner";
 import { listen } from "@tauri-apps/api/event";
-import { getExpandPrefix } from "./lib/snippets";
+import { getExpandPrefix, createBoilerplateConfig, syncSnippetSource } from "./lib/snippets";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { Notification, QueryFilters } from "./lib/types";
 
 export type ActiveScreen = "feed" | "telemetry" | "expander" | "settings";
@@ -148,6 +149,24 @@ export default function App() {
     toastCtx.showToast("Copied to clipboard");
     setShowExpanderPalette(false);
     setShowCommandPalette(false);
+  }, [toastCtx]);
+
+  const handleNewConfig = useCallback(async () => {
+    try {
+      const folder = await openDialog({ directory: true, title: "Choose folder for new expansion config" });
+      if (!folder) return;
+      const path = typeof folder === "string" ? folder : (folder as any);
+      if (!path) return;
+      const name = window.prompt("Package name:", path.split("/").pop() || "snippets");
+      if (!name) return;
+      const source = await createBoilerplateConfig(path, name);
+      const result = await syncSnippetSource(source.id);
+      toastCtx.showToast(`Created config with ${result.added} snippets in ${path}`);
+      setActiveScreen("expander");
+    } catch (err: any) {
+      console.error("Boilerplate failed:", err);
+      toastCtx.showToast(`Failed: ${err}`);
+    }
   }, [toastCtx]);
 
   // Reset selection when filter or search changes
@@ -297,10 +316,11 @@ export default function App() {
         case "mark_all_read": markAllRead(); break;
         case "clear_all": clearAll(); break;
         case "toggle_help": setShowHelp(true); break;
+        case "new_config": handleNewConfig(); break;
       }
       setShowCommandPalette(false);
     },
-    [markAllRead, clearAll]
+    [markAllRead, clearAll, handleNewConfig]
   );
 
   return (

@@ -93,3 +93,57 @@ pub fn tags_to_json(tags: &[String]) -> Option<String> {
     }
     Some(serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BOILERPLATE_TEMPLATE: &str = include_str!("../templates/dispatch-snippets.yml");
+
+    #[test]
+    fn boilerplate_template_parses() {
+        // Substitute placeholder so YAML is valid
+        let yaml = BOILERPLATE_TEMPLATE.replace("{PACKAGE_NAME}", "test-package");
+        let config: ExpansionConfig = serde_yaml::from_str(&yaml)
+            .expect("Boilerplate template must parse as valid YAML");
+
+        assert!(config.snippets.len() >= 5, "Template should have at least 5 example snippets");
+        assert_eq!(config.name.as_deref(), Some("test-package"));
+
+        // Verify each snippet has required fields
+        for snippet in &config.snippets {
+            assert!(!snippet.trigger.is_empty(), "Trigger must not be empty: {:?}", snippet);
+            assert!(!snippet.body.is_empty(), "Body must not be empty: {:?}", snippet);
+        }
+
+        // Verify variable types are represented
+        let var_types: Vec<&str> = config.snippets.iter()
+            .flat_map(|s| s.variables.iter().map(|v| v.var_type.as_str()))
+            .collect();
+        assert!(var_types.contains(&"date"), "Should have date variable example");
+        assert!(var_types.contains(&"shell"), "Should have shell variable example");
+        assert!(var_types.contains(&"form"), "Should have form variable example");
+        assert!(var_types.contains(&"choice"), "Should have choice variable example");
+        assert!(var_types.contains(&"clipboard"), "Should have clipboard variable example");
+    }
+
+    #[test]
+    fn variables_to_json_round_trip() {
+        let vars = vec![
+            ParsedVariable {
+                name: "test".to_string(),
+                var_type: "echo".to_string(),
+                params: {
+                    let mut m = std::collections::HashMap::new();
+                    m.insert("value".to_string(), serde_json::json!("hello"));
+                    m
+                },
+            },
+        ];
+        let json = variables_to_json(&vars).unwrap();
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0]["name"], "test");
+        assert_eq!(parsed[0]["type"], "echo");
+    }
+}

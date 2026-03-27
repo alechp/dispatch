@@ -108,8 +108,9 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
       if (!path) return;
       const name = window.prompt("Package name:", path.split("/").pop() || "snippets");
       if (!name) return;
-      await createBoilerplateConfig(path, name);
-      showToast(`Created dispatch-snippets.yml in ${path}`);
+      const source = await createBoilerplateConfig(path, name);
+      const result = await syncSnippetSource(source.id);
+      showToast(`Created config with ${result.added} snippets in ${path}`);
       refresh();
     } catch (err: any) {
       console.error("Boilerplate failed:", err);
@@ -192,6 +193,19 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
       {/* Live Expansion Toggle */}
       <LiveExpansionToggle />
 
+      {/* New Config CTA */}
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-border-subtle">
+        <span className="text-[11px] text-text-secondary">
+          Create expansion config in any folder
+        </span>
+        <button
+          onClick={handleNewConfig}
+          className="text-[11px] text-accent hover:text-accent-hover transition-colors px-2.5 py-1 rounded-md border border-accent/30 hover:border-accent/50"
+        >
+          New Config File
+        </button>
+      </div>
+
       {/* Snippet list */}
       <div className="flex-1 overflow-y-auto">
         {loading ? (
@@ -236,12 +250,6 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
             className="text-xs text-text-secondary hover:text-text-primary transition-colors px-3 py-1.5 rounded-md border border-border-subtle hover:border-border-default"
           >
             Export
-          </button>
-          <button
-            onClick={handleNewConfig}
-            className="text-xs text-text-secondary hover:text-text-primary transition-colors px-3 py-1.5 rounded-md border border-border-subtle hover:border-border-default"
-          >
-            New Config
           </button>
         </div>
         <button

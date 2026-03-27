@@ -24,6 +24,7 @@ const COMMANDS: Command[] = [
   { label: "Go to Settings", action: "go_settings", category: "Navigation" },
   { label: "Mark All Read", action: "mark_all_read", category: "Actions" },
   { label: "Clear All Notifications", action: "clear_all", category: "Actions" },
+  { label: "Create New Expansion Config", action: "new_config", category: "Actions" },
   { label: "Toggle Keyboard Shortcuts", action: "toggle_help", category: "Help" },
 ];
 

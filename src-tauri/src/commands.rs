@@ -13,6 +13,8 @@ use crate::state::AppState;
 use crate::trigger_cache;
 use crate::yapture;
 
+const BOILERPLATE_TEMPLATE: &str = include_str!("../templates/dispatch-snippets.yml");
+
 #[tauri::command]
 pub async fn get_notifications(
     state: State<'_, Arc<AppState>>,
@@ -1059,21 +1061,7 @@ pub async fn create_boilerplate_config(
         return Err("dispatch-snippets.yml already exists in this folder. Import it instead.".to_string());
     }
 
-    let template = format!(
-r#"# Dispatch Expansion Config
-# Package: {name}
-# Docs: https://dispatch.dev/docs/expansions
-#
-# Add your snippets below. Changes are auto-synced.
-
-name: "{name}"
-snippets:
-  - trigger: ":example"
-    label: "Example snippet"
-    body: "Hello from {name}!"
-"#,
-        name = package_name
-    );
+    let template = BOILERPLATE_TEMPLATE.replace("{PACKAGE_NAME}", &package_name);
 
     std::fs::write(&file_path, &template)
         .map_err(|e| format!("Failed to write file: {}", e))?;
