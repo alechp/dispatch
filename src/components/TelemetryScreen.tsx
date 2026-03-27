@@ -89,7 +89,7 @@ export function TelemetryScreen({ onBack }: TelemetryScreenProps) {
 
   if (loading) {
     return (
-      <div className="flex flex-col h-screen bg-surface">
+      <div className="flex flex-col flex-1 min-h-0 bg-surface">
         <TopBar onBack={onBack} timeRange={timeRange} onTimeRangeChange={setTimeRange} />
         <div className="flex-1 flex items-center justify-center">
           <p className="text-sm text-text-tertiary">Loading analytics...</p>
@@ -100,7 +100,7 @@ export function TelemetryScreen({ onBack }: TelemetryScreenProps) {
 
   if (!summary) {
     return (
-      <div className="flex flex-col h-screen bg-surface">
+      <div className="flex flex-col flex-1 min-h-0 bg-surface">
         <TopBar onBack={onBack} timeRange={timeRange} onTimeRangeChange={setTimeRange} />
         <div className="flex-1 flex items-center justify-center">
           <p className="text-sm text-text-tertiary">No telemetry data available.</p>
@@ -114,7 +114,7 @@ export function TelemetryScreen({ onBack }: TelemetryScreenProps) {
   const totalReads = summary.reads_by_method.reduce((sum, [, c]) => sum + c, 0) || 1;
 
   return (
-    <div className="flex flex-col h-screen bg-surface">
+    <div className="flex flex-col flex-1 min-h-0 bg-surface">
       <TopBar onBack={onBack} timeRange={timeRange} onTimeRangeChange={setTimeRange} />
 
       <div className="flex-1 overflow-y-auto">

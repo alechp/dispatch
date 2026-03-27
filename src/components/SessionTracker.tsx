@@ -179,7 +179,7 @@ export function SessionContent({ onFocusTerminal }: {
 
 export function SessionTracker({ onBack, onFocusTerminal }: SessionTrackerProps) {
   return (
-    <div className="flex flex-col h-screen bg-surface">
+    <div className="flex flex-col flex-1 min-h-0 bg-surface">
       <div className="flex items-center gap-3 px-4 py-3 border-b border-border-subtle bg-surface shrink-0">
         <button
           onClick={onBack}

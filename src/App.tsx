@@ -241,12 +241,19 @@ export default function App() {
         }
       },
       focusTerminal: () => {
-        if (selectedIndex !== null) {
-          const n = notifications[selectedIndex];
-          if (n?.tmux_session) {
-            handleFocusTerminal(n.id, n.tmux_session, n.tmux_window, n.tmux_pane);
-          }
+        if (activeScreen !== "feed" || feedView !== "notifications") {
+          return;
         }
+        if (selectedIndex === null) {
+          toastCtx.showToast("Select a notification first (j/k)");
+          return;
+        }
+        const n = notifications[selectedIndex];
+        if (!n?.tmux_session) {
+          toastCtx.showToast("No terminal session on this notification");
+          return;
+        }
+        handleFocusTerminal(n.id, n.tmux_session, n.tmux_window, n.tmux_pane);
       },
       markAllRead: () => {
         markAllRead();
@@ -300,7 +307,7 @@ export default function App() {
         });
       },
     }),
-    [selectedIndex, notifications, markRead, handleDelete, handleFocusTerminal, markAllRead, clearAll, visualMode, visualAnchor, visualSelections]
+    [selectedIndex, notifications, markRead, handleDelete, handleFocusTerminal, markAllRead, clearAll, visualMode, visualAnchor, visualSelections, activeScreen, feedView, toastCtx]
   );
 
   const { config: hotkeyConfig, refreshConfig } = useHotkeys(hotkeyActions);

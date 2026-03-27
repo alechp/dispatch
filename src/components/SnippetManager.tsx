@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { useSnippets } from "../hooks/useSnippets";
 import { useToast } from "../hooks/useToast";
 import {
@@ -74,6 +74,45 @@ function parseTags(json: string | null): string[] {
 }
 
 // ---------------------------------------------------------------------------
+// SourceGroupHeader
+// ---------------------------------------------------------------------------
+
+function SourceGroupHeader({
+  name,
+  count,
+  isCollapsed,
+  onToggle,
+}: {
+  name: string;
+  count: number;
+  isCollapsed: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      onClick={onToggle}
+      className="flex items-center w-full px-4 py-2 bg-surface-overlay/50 border-b border-border-subtle hover:bg-surface-overlay transition-colors group"
+    >
+      <svg
+        width="12"
+        height="12"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className={`text-text-tertiary transition-transform ${isCollapsed ? "" : "rotate-90"}`}
+      >
+        <polyline points="9 18 15 12 9 6" />
+      </svg>
+      <span className="ml-2 text-[11px] font-medium text-text-secondary">{name}</span>
+      <span className="ml-1.5 text-[10px] text-text-tertiary">({count})</span>
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
@@ -86,6 +125,39 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
   const [view, setView] = useState<ViewMode>("list");
   const [editingSnippet, setEditingSnippet] = useState<Snippet | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
+
+  // Group snippets by source
+  const groupedSnippets = useMemo(() => {
+    const groups: { name: string; sourceId: string | null; snippets: Snippet[] }[] = [];
+    const groupMap = new Map<string, typeof groups[0]>();
+
+    for (const snippet of snippets) {
+      const key = snippet.source_name || "Defaults";
+      let group = groupMap.get(key);
+      if (!group) {
+        group = { name: key, sourceId: snippet.source_id, snippets: [] };
+        groupMap.set(key, group);
+        groups.push(group);
+      }
+      group.snippets.push(snippet);
+    }
+
+    return groups;
+  }, [snippets]);
+
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+
+  const toggleGroup = useCallback((groupName: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupName)) {
+        next.delete(groupName);
+      } else {
+        next.add(groupName);
+      }
+      return next;
+    });
+  }, []);
 
   const handleOpenCreate = useCallback(() => {
     setEditingSnippet(null);
@@ -185,7 +257,7 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-surface">
+    <div className="flex flex-col flex-1 min-h-0 bg-surface">
       {/* Top bar */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border-subtle bg-surface shrink-0">
         <button
@@ -215,10 +287,10 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
       </div>
 
       {/* Live Expansion Toggle */}
-      <LiveExpansionToggle />
+      <div className="shrink-0"><LiveExpansionToggle /></div>
 
       {/* New Config CTA */}
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-border-subtle">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-border-subtle shrink-0">
         <span className="text-[11px] text-text-secondary">
           Create expansion config in any folder
         </span>
@@ -232,7 +304,7 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
 
       {/* Source filter chip */}
       {sourceFilter && (
-        <div className="flex items-center justify-between px-4 py-2 bg-accent/5 border-b border-border-subtle">
+        <div className="flex items-center justify-between px-4 py-2 bg-accent/5 border-b border-border-subtle shrink-0">
           <span className="text-[11px] text-accent font-medium">
             Showing: {sourceFilter.name}
           </span>
@@ -260,6 +332,44 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
             >
               Create your first snippet
             </button>
+          </div>
+        ) : !search ? (
+          <div>
+            {groupedSnippets.length > 1 && (
+              <div className="flex items-center justify-end px-4 py-1.5 border-b border-border-subtle shrink-0">
+                <button
+                  onClick={() => setCollapsedGroups(new Set())}
+                  className="text-[10px] text-text-tertiary hover:text-text-primary transition-colors mr-2"
+                >
+                  Expand All
+                </button>
+                <button
+                  onClick={() => setCollapsedGroups(new Set(groupedSnippets.map(g => g.name)))}
+                  className="text-[10px] text-text-tertiary hover:text-text-primary transition-colors"
+                >
+                  Collapse All
+                </button>
+              </div>
+            )}
+            {groupedSnippets.map((group) => (
+              <div key={group.name}>
+                <SourceGroupHeader
+                  name={group.name}
+                  count={group.snippets.length}
+                  isCollapsed={collapsedGroups.has(group.name)}
+                  onToggle={() => toggleGroup(group.name)}
+                />
+                {!collapsedGroups.has(group.name) &&
+                  group.snippets.map((snippet) => (
+                    <SnippetRow
+                      key={snippet.id}
+                      snippet={snippet}
+                      onClick={() => handleOpenEdit(snippet)}
+                      onRefresh={refresh}
+                    />
+                  ))}
+              </div>
+            ))}
           </div>
         ) : (
           <div>
@@ -379,11 +489,6 @@ function SnippetRow({
           {snippet.label && (
             <span className="text-xs text-text-secondary truncate">
               {snippet.label}
-            </span>
-          )}
-          {snippet.source_name && (
-            <span className="text-[10px] text-text-tertiary bg-surface-overlay px-1.5 py-0.5 rounded shrink-0 ml-auto">
-              {snippet.source_name}
             </span>
           )}
         </div>
