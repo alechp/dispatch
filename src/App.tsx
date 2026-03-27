@@ -14,7 +14,7 @@ import { deleteNotification, focusTerminal } from "./lib/api";
 import { copyToClipboard } from "./lib/liveExpansion";
 import { trackEvent } from "./lib/telemetry";
 import { TelemetryScreen } from "./components/TelemetryScreen";
-import { SessionTracker } from "./components/SessionTracker";
+import { SessionContent } from "./components/SessionTracker";
 import { SnippetManager } from "./components/SnippetManager";
 import { ExpanderPalette } from "./components/ExpanderPalette";
 import { YaptureSettings } from "./components/YaptureSettings";
@@ -23,9 +23,10 @@ import { listen } from "@tauri-apps/api/event";
 import { getExpandPrefix } from "./lib/snippets";
 import type { Notification, QueryFilters } from "./lib/types";
 
-export type ActiveScreen = "feed" | "telemetry" | "sessions" | "expander" | "settings";
+export type ActiveScreen = "feed" | "telemetry" | "expander" | "settings";
+export type FeedView = "notifications" | "sessions";
 
-const SCREEN_ORDER: ActiveScreen[] = ["feed", "sessions", "telemetry", "expander", "settings"];
+const SCREEN_ORDER: ActiveScreen[] = ["feed", "telemetry", "expander", "settings"];
 
 export default function App() {
   const toastCtx = useToastProvider();
@@ -34,6 +35,7 @@ export default function App() {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const [activeScreen, setActiveScreen] = useState<ActiveScreen>("feed");
+  const [feedView, setFeedView] = useState<FeedView>("notifications");
   const [showExpanderPalette, setShowExpanderPalette] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [bannerQueue, setBannerQueue] = useState<Notification[]>([]);
@@ -132,7 +134,7 @@ export default function App() {
       }
 
       const idx = parseInt(e.key, 10);
-      if (idx >= 1 && idx <= 5) {
+      if (idx >= 1 && idx <= SCREEN_ORDER.length) {
         e.preventDefault();
         setActiveScreen(SCREEN_ORDER[idx - 1]);
       }
@@ -287,8 +289,8 @@ export default function App() {
   const handleCommandPaletteAction = useCallback(
     (action: string) => {
       switch (action) {
-        case "go_feed": setActiveScreen("feed"); break;
-        case "go_sessions": setActiveScreen("sessions"); break;
+        case "go_feed": setActiveScreen("feed"); setFeedView("notifications"); break;
+        case "go_sessions": setActiveScreen("feed"); setFeedView("sessions"); break;
         case "go_telemetry": setActiveScreen("telemetry"); break;
         case "go_expander": setActiveScreen("expander"); break;
         case "go_settings": setActiveScreen("settings"); break;
@@ -310,9 +312,10 @@ export default function App() {
         onClearAll={clearAll}
         activeScreen={activeScreen}
         onScreenChange={setActiveScreen}
-        onToggleHelp={() => setShowHelp((prev) => !prev)}
+        feedView={feedView}
+        onFeedViewChange={setFeedView}
       />
-      {activeScreen === "feed" && (
+      {activeScreen === "feed" && feedView === "notifications" && (
         <>
           <FilterBar
             onSearchChange={setSearch}
@@ -337,14 +340,11 @@ export default function App() {
           />
         </>
       )}
+      {activeScreen === "feed" && feedView === "sessions" && (
+        <SessionContent onFocusTerminal={handleFocusTerminal} />
+      )}
       {activeScreen === "telemetry" && (
         <TelemetryScreen onBack={() => setActiveScreen("feed")} />
-      )}
-      {activeScreen === "sessions" && (
-        <SessionTracker
-          onBack={() => setActiveScreen("feed")}
-          onFocusTerminal={handleFocusTerminal}
-        />
       )}
       {activeScreen === "expander" && (
         <SnippetManager onBack={() => setActiveScreen("feed")} />

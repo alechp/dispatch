@@ -100,6 +100,23 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
 
   const { showToast } = useToast();
 
+  const handleNewConfig = useCallback(async () => {
+    try {
+      const folder = await openDialog({ directory: true, title: "Choose folder for new expansion config" });
+      if (!folder) return;
+      const path = typeof folder === "string" ? folder : (folder as any);
+      if (!path) return;
+      const name = window.prompt("Package name:", path.split("/").pop() || "snippets");
+      if (!name) return;
+      await createBoilerplateConfig(path, name);
+      showToast(`Created dispatch-snippets.yml in ${path}`);
+      refresh();
+    } catch (err: any) {
+      console.error("Boilerplate failed:", err);
+      showToast(`Failed: ${err}`);
+    }
+  }, [showToast, refresh]);
+
   const handleExport = useCallback(async () => {
     try {
       const data = await exportSnippets();
@@ -162,10 +179,13 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
         />
         <button
           onClick={handleOpenCreate}
-          className="flex items-center justify-center w-7 h-7 rounded-md bg-accent hover:bg-accent-hover text-white text-sm transition-colors"
+          className="flex items-center justify-center w-7 h-7 rounded-md bg-accent hover:bg-accent-hover text-white transition-colors shrink-0"
           title="Add snippet"
         >
-          +
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
         </button>
       </div>
 
@@ -216,6 +236,12 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
             className="text-xs text-text-secondary hover:text-text-primary transition-colors px-3 py-1.5 rounded-md border border-border-subtle hover:border-border-default"
           >
             Export
+          </button>
+          <button
+            onClick={handleNewConfig}
+            className="text-xs text-text-secondary hover:text-text-primary transition-colors px-3 py-1.5 rounded-md border border-border-subtle hover:border-border-default"
+          >
+            New Config
           </button>
         </div>
         <button

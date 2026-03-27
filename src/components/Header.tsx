@@ -1,4 +1,4 @@
-import type { ActiveScreen } from "../App";
+import type { ActiveScreen, FeedView } from "../App";
 
 interface HeaderProps {
   unreadCount: number;
@@ -6,10 +6,14 @@ interface HeaderProps {
   onClearAll: () => void;
   activeScreen: ActiveScreen;
   onScreenChange: (screen: ActiveScreen) => void;
-  onToggleHelp?: () => void;
+  feedView: FeedView;
+  onFeedViewChange: (view: FeedView) => void;
 }
 
-export function Header({ unreadCount, onMarkAllRead, onClearAll, activeScreen, onScreenChange, onToggleHelp }: HeaderProps) {
+export function Header({ unreadCount, onMarkAllRead, onClearAll, activeScreen, onScreenChange, feedView, onFeedViewChange }: HeaderProps) {
+  const isFeedNotifications = activeScreen === "feed" && feedView === "notifications";
+  const isFeedSessions = activeScreen === "feed" && feedView === "sessions";
+
   return (
     <header className="flex items-center justify-between px-4 py-3 border-b border-border-subtle bg-surface" data-tauri-drag-region>
       <div className="flex items-center gap-2" data-tauri-drag-region>
@@ -24,12 +28,32 @@ export function Header({ unreadCount, onMarkAllRead, onClearAll, activeScreen, o
       </div>
 
       <div className="flex items-center gap-1">
+        {/* Feed / Notifications */}
         <button
-          onClick={() => onScreenChange(activeScreen === "sessions" ? "feed" : "sessions")}
+          onClick={() => {
+            onFeedViewChange("notifications");
+            onScreenChange("feed");
+          }}
           className={`p-1.5 rounded-md hover:bg-surface-overlay transition-colors ${
-            activeScreen === "sessions" ? "text-accent" : "text-text-tertiary hover:text-text-primary"
+            isFeedNotifications ? "text-accent" : "text-text-tertiary hover:text-text-primary"
           }`}
-          title="Sessions"
+          title="Notifications"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+            <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+          </svg>
+        </button>
+        {/* Projects / Sessions */}
+        <button
+          onClick={() => {
+            onFeedViewChange("sessions");
+            onScreenChange("feed");
+          }}
+          className={`p-1.5 rounded-md hover:bg-surface-overlay transition-colors ${
+            isFeedSessions ? "text-accent" : "text-text-tertiary hover:text-text-primary"
+          }`}
+          title="Projects"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <rect x="3" y="3" width="7" height="7" />
@@ -75,22 +99,6 @@ export function Header({ unreadCount, onMarkAllRead, onClearAll, activeScreen, o
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
         </button>
-        {onToggleHelp && (
-          <button
-            onClick={onToggleHelp}
-            className="p-1.5 text-text-tertiary hover:text-text-primary rounded-md hover:bg-surface-overlay transition-colors"
-            title="Keyboard shortcuts"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="2" y="6" width="20" height="12" rx="2" />
-              <line x1="6" y1="10" x2="6" y2="10" />
-              <line x1="10" y1="10" x2="10" y2="10" />
-              <line x1="14" y1="10" x2="14" y2="10" />
-              <line x1="18" y1="10" x2="18" y2="10" />
-              <line x1="8" y1="14" x2="16" y2="14" />
-            </svg>
-          </button>
-        )}
         <button
           onClick={onMarkAllRead}
           className="px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary rounded-md hover:bg-surface-overlay transition-colors"
