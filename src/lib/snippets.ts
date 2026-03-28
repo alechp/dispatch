@@ -117,6 +117,10 @@ export async function refreshTriggers(): Promise<void> {
   return invoke("refresh_triggers");
 }
 
+export async function getTriggerCacheCount(): Promise<number> {
+  return invoke<number>("get_trigger_cache_count");
+}
+
 export async function readSourceFile(sourceId: string): Promise<string> {
   return invoke<string>("read_source_file", { sourceId });
 }
