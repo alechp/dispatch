@@ -10,7 +10,7 @@ import { useNotificationListener } from "./hooks/useNotificationListener";
 import { useSound } from "./hooks/useSound";
 import { useHotkeys } from "./hooks/useHotkeys";
 import { ToastContext, useToastProvider } from "./hooks/useToast";
-import { deleteNotification, focusTerminal } from "./lib/api";
+import { deleteNotification, focusTerminal, getNotificationBannerConfig } from "./lib/api";
 import { copyToClipboard } from "./lib/liveExpansion";
 import { trackEvent } from "./lib/telemetry";
 import { TelemetryScreen } from "./components/TelemetryScreen";
@@ -22,7 +22,8 @@ import { NotificationBanner } from "./components/NotificationBanner";
 import { listen } from "@tauri-apps/api/event";
 import { getExpandPrefix, createBoilerplateConfig, syncSnippetSource } from "./lib/snippets";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import type { Notification, QueryFilters } from "./lib/types";
+import type { Notification, QueryFilters, NotificationBannerConfig, BannerScreenKey } from "./lib/types";
+import { DEFAULT_BANNER_CONFIG } from "./lib/types";
 
 export type ActiveScreen = "feed" | "telemetry" | "expander" | "settings";
 export type FeedView = "notifications" | "sessions";
@@ -44,6 +45,7 @@ export default function App() {
   const [visualSelections, setVisualSelections] = useState<Set<string>>(new Set());
   const [expandPrefix, setExpandPrefix] = useState(":");
   const [visualAnchor, setVisualAnchor] = useState<number | null>(null);
+  const [bannerConfig, setBannerConfig] = useState<NotificationBannerConfig>(DEFAULT_BANNER_CONFIG);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const queryFilters: QueryFilters = {
@@ -60,13 +62,29 @@ export default function App() {
 
   const unreadCount = notifications.filter((n) => n.is_read === 0).length;
 
+  const currentScreenKey: BannerScreenKey = useMemo(() => {
+    if (activeScreen === "feed") return `feed/${feedView}` as BannerScreenKey;
+    return activeScreen as BannerScreenKey;
+  }, [activeScreen, feedView]);
+
+  // Load banner config on mount
+  useEffect(() => {
+    getNotificationBannerConfig().then(setBannerConfig).catch(() => {});
+  }, []);
+
+  const refreshBannerConfig = useCallback(() => {
+    getNotificationBannerConfig().then(setBannerConfig).catch(() => {});
+  }, []);
+
   const handleNewNotification = useCallback(
     (notification: Notification) => {
       play();
       refresh();
-      setBannerQueue((prev) => [notification, ...prev]);
+      if (bannerConfig.globalEnabled && bannerConfig.screens[currentScreenKey] !== false) {
+        setBannerQueue((prev) => [notification, ...prev]);
+      }
     },
-    [play, refresh]
+    [play, refresh, bannerConfig, currentScreenKey]
   );
 
   const handleDelete = useCallback(
@@ -380,6 +398,7 @@ export default function App() {
         <YaptureSettings
           onBack={() => setActiveScreen("feed")}
           onHotkeyConfigChanged={refreshConfig}
+          onBannerConfigChanged={refreshBannerConfig}
         />
       )}
       {showHelp && (

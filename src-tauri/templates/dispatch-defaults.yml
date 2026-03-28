@@ -1,0 +1,109 @@
+# Dispatch — Default Snippets
+# These are foundational utility snippets that ship with Dispatch.
+# Feel free to edit, disable, or remove any of them.
+
+name: "Defaults"
+
+snippets:
+  # ── Date & Time ───────────────────────────────────────
+  - trigger: ":date"
+    label: "Today's date"
+    body: "{{date}}"
+    tags: [utility, date]
+    variables:
+      - name: date
+        type: date
+        params:
+          format: "%Y-%m-%d"
+
+  - trigger: ":time"
+    label: "Current time"
+    body: "{{time}}"
+    tags: [utility, date]
+    variables:
+      - name: time
+        type: date
+        params:
+          format: "%H:%M"
+
+  - trigger: ":now"
+    label: "Date and time"
+    body: "{{now}}"
+    tags: [utility, date]
+    variables:
+      - name: now
+        type: date
+        params:
+          format: "%Y-%m-%d %H:%M"
+
+  - trigger: ":iso"
+    label: "ISO 8601 timestamp"
+    body: "{{iso}}"
+    tags: [utility, date]
+    variables:
+      - name: iso
+        type: date
+        params:
+          format: "%Y-%m-%dT%H:%M:%S%z"
+
+  # ── Clipboard ─────────────────────────────────────────
+  - trigger: ":clip"
+    label: "Clipboard contents"
+    body: "{{clip}}"
+    tags: [utility]
+    variables:
+      - name: clip
+        type: clipboard
+
+  # ── Kaomoji & Symbols ─────────────────────────────────
+  - trigger: ":shrug"
+    label: "Shrug"
+    body: "¯\\_(ツ)_/¯"
+    tags: [kaomoji]
+
+  - trigger: ":tableflip"
+    label: "Table flip"
+    body: "(╯°□°)╯︵ ┻━┻"
+    tags: [kaomoji]
+
+  - trigger: ":unflip"
+    label: "Table unflip"
+    body: "┬─┬ノ( º _ ºノ)"
+    tags: [kaomoji]
+
+  - trigger: ":lenny"
+    label: "Lenny face"
+    body: "( ͡° ͜ʖ ͡°)"
+    tags: [kaomoji]
+
+  - trigger: ":disapprove"
+    label: "Look of disapproval"
+    body: "ಠ_ಠ"
+    tags: [kaomoji]
+
+  # ── Markdown helpers ──────────────────────────────────
+  - trigger: ":mdlink"
+    label: "Markdown link from clipboard"
+    body: "[{{label}}]({{url}})"
+    tags: [markdown, utility]
+    variables:
+      - name: url
+        type: clipboard
+      - name: label
+        type: form
+        params:
+          label: "Link text"
+          default: "link"
+
+  - trigger: ":mdimg"
+    label: "Markdown image from clipboard"
+    body: "![{{alt}}]({{url}})"
+    tags: [markdown, utility]
+    variables:
+      - name: url
+        type: clipboard
+      - name: alt
+        type: form
+        params:
+          label: "Alt text"
+          default: "image"

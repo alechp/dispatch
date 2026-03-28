@@ -103,3 +103,36 @@ export interface HotkeyBinding {
 export interface HotkeyConfig {
   bindings: HotkeyBinding[];
 }
+
+// --- Notification Banner Config ---
+
+export type BannerScreenKey =
+  | "feed/notifications"
+  | "feed/sessions"
+  | "telemetry"
+  | "expander"
+  | "settings";
+
+export interface NotificationBannerConfig {
+  globalEnabled: boolean;
+  screens: Record<BannerScreenKey, boolean>;
+}
+
+export const DEFAULT_BANNER_CONFIG: NotificationBannerConfig = {
+  globalEnabled: true,
+  screens: {
+    "feed/notifications": true,
+    "feed/sessions": true,
+    "telemetry": true,
+    "expander": true,
+    "settings": true,
+  },
+};
+
+export const BANNER_SCREEN_LABELS: Record<BannerScreenKey, string> = {
+  "feed/notifications": "Notifications",
+  "feed/sessions": "Projects",
+  "telemetry": "Analytics",
+  "expander": "Text Expander",
+  "settings": "Settings",
+};

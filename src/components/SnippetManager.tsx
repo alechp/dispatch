@@ -5,22 +5,8 @@ import {
   createSnippet,
   updateSnippet,
   deleteSnippet,
-  importSnippets,
-  exportSnippets,
   toggleSnippetFavorite,
-  getExpandPrefix,
-  setExpandPrefix as setExpandPrefixApi,
-  listSnippetSources,
-  addSnippetSource,
-  removeSnippetSource,
-  syncSnippetSource,
-  updateSnippetSource,
-  createBoilerplateConfig,
-  readSourceFile,
-  writeSourceFile,
-  refreshTriggers,
 } from "../lib/snippets";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   getLiveExpansionEnabled,
   setLiveExpansionEnabled,
@@ -31,13 +17,13 @@ import {
   copyToClipboard,
 } from "../lib/liveExpansion";
 import type { ExpansionDiagnostics } from "../lib/liveExpansion";
-import type { Snippet, SnippetVariable, SnippetSource } from "../lib/types";
+import type { Snippet, SnippetVariable } from "../lib/types";
 
 interface SnippetManagerProps {
   onBack: () => void;
 }
 
-type ViewMode = "list" | "edit" | "sources" | "edit-source";
+type ViewMode = "list" | "edit";
 
 const VARIABLE_TYPES: SnippetVariable["type"][] = [
   "echo",
@@ -119,12 +105,10 @@ function SourceGroupHeader({
 export function SnippetManager({ onBack }: SnippetManagerProps) {
   const [search, setSearch] = useState("");
   const [sourceFilter, setSourceFilter] = useState<{ id: string; name: string } | null>(null);
-  const [editingSource, setEditingSource] = useState<SnippetSource | null>(null);
   const { snippets, loading, refresh } = useSnippets(search || undefined, undefined, sourceFilter?.id);
 
   const [view, setView] = useState<ViewMode>("list");
   const [editingSnippet, setEditingSnippet] = useState<Snippet | null>(null);
-  const [showImportModal, setShowImportModal] = useState(false);
 
   // Group snippets by source
   const groupedSnippets = useMemo(() => {
@@ -175,83 +159,12 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
     refresh();
   }, [refresh]);
 
-  const { showToast } = useToast();
-
-  const handleNewConfig = useCallback(async () => {
-    try {
-      const folder = await openDialog({ directory: true, title: "Choose folder for new expansion config" });
-      if (!folder) return;
-      const path = typeof folder === "string" ? folder : (folder as any);
-      if (!path) return;
-      const name = window.prompt("Package name:", path.split("/").pop() || "snippets");
-      if (!name) return;
-      const source = await createBoilerplateConfig(path, name);
-      const result = await syncSnippetSource(source.id);
-      showToast(`Created config with ${result.added} snippets in ${path}`);
-      refresh();
-    } catch (err: any) {
-      console.error("Boilerplate failed:", err);
-      showToast(`Failed: ${err}`);
-    }
-  }, [showToast, refresh]);
-
-  const handleExport = useCallback(async () => {
-    try {
-      const data = await exportSnippets();
-      const json = JSON.stringify(data, null, 2);
-      await copyToClipboard(json);
-      showToast("Exported to clipboard");
-    } catch (err) {
-      console.error("Export failed:", err);
-    }
-  }, [showToast]);
-
-  const handleImportSubmit = useCallback(
-    async (json: string) => {
-      try {
-        await importSnippets(json);
-        setShowImportModal(false);
-        refresh();
-      } catch (err) {
-        console.error("Import failed:", err);
-      }
-    },
-    [refresh]
-  );
-
   if (view === "edit") {
     return (
       <SnippetEditView
         snippet={editingSnippet}
         onBack={handleBackToList}
         onSaved={handleBackToList}
-      />
-    );
-  }
-
-  if (view === "edit-source" && editingSource) {
-    return (
-      <SourceFileEditor
-        source={editingSource}
-        onBack={() => {
-          setEditingSource(null);
-          setView("sources");
-        }}
-        onSaved={() => {
-          refresh();
-        }}
-      />
-    );
-  }
-
-  if (view === "sources") {
-    return (
-      <SourcesView
-        onBack={handleBackToList}
-        onEditSource={(source) => {
-          setEditingSource(source);
-          setView("edit-source");
-        }}
       />
     );
   }
@@ -288,19 +201,6 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
 
       {/* Live Expansion Toggle */}
       <div className="shrink-0"><LiveExpansionToggle /></div>
-
-      {/* New Config CTA */}
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-border-subtle shrink-0">
-        <span className="text-[11px] text-text-secondary">
-          Create expansion config in any folder
-        </span>
-        <button
-          onClick={handleNewConfig}
-          className="text-[11px] text-accent hover:text-accent-hover transition-colors px-2.5 py-1 rounded-md border border-accent/30 hover:border-accent/50"
-        >
-          New Config File
-        </button>
-      </div>
 
       {/* Source filter chip */}
       {sourceFilter && (
@@ -385,37 +285,6 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
         )}
       </div>
 
-      {/* Bottom bar */}
-      <div className="flex items-center justify-between px-4 py-3 border-t border-border-subtle bg-surface shrink-0">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowImportModal(true)}
-            className="text-xs text-text-secondary hover:text-text-primary transition-colors px-3 py-1.5 rounded-md border border-border-subtle hover:border-border-default"
-          >
-            Import
-          </button>
-          <button
-            onClick={handleExport}
-            className="text-xs text-text-secondary hover:text-text-primary transition-colors px-3 py-1.5 rounded-md border border-border-subtle hover:border-border-default"
-          >
-            Export
-          </button>
-        </div>
-        <button
-          onClick={() => setView("sources")}
-          className="text-xs text-accent hover:text-accent-hover transition-colors px-3 py-1.5 rounded-md border border-accent/30 hover:border-accent/50"
-        >
-          Sources
-        </button>
-      </div>
-
-      {/* Import modal */}
-      {showImportModal && (
-        <ImportModal
-          onClose={() => setShowImportModal(false)}
-          onImport={handleImportSubmit}
-        />
-      )}
     </div>
   );
 }
@@ -1108,67 +977,6 @@ function ListParamEditor({
   );
 }
 
-// ---------------------------------------------------------------------------
-// ImportModal
-// ---------------------------------------------------------------------------
-
-function ImportModal({
-  onClose,
-  onImport,
-}: {
-  onClose: () => void;
-  onImport: (json: string) => void;
-}) {
-  const [json, setJson] = useState("");
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-      onClick={onClose}
-    >
-      <div
-        className="w-[400px] bg-surface-raised border border-border-subtle rounded-lg shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
-          <h2 className="text-sm font-semibold text-text-primary">
-            Import Snippets
-          </h2>
-          <button
-            onClick={onClose}
-            className="p-1 text-text-tertiary hover:text-text-secondary rounded transition-colors"
-          >
-            <CloseIcon />
-          </button>
-        </div>
-        <div className="p-4">
-          <textarea
-            value={json}
-            onChange={(e) => setJson(e.target.value)}
-            rows={10}
-            placeholder="Paste JSON here..."
-            className="w-full bg-surface-overlay border border-border-subtle rounded-md px-3 py-2 text-xs text-text-primary font-mono placeholder:text-text-tertiary focus:outline-none focus:border-accent/50 transition-colors resize-y"
-          />
-        </div>
-        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-border-subtle">
-          <button
-            onClick={onClose}
-            className="text-xs text-text-secondary hover:text-text-primary transition-colors px-3 py-1.5 rounded-md border border-border-subtle"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={() => onImport(json)}
-            disabled={!json.trim()}
-            className="text-xs text-white bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors px-3 py-1.5 rounded-md"
-          >
-            Import
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // LiveExpansionToggle
@@ -1364,359 +1172,6 @@ function PermissionRow({
   );
 }
 
-// ---------------------------------------------------------------------------
-// SourcesView — manage external expansion config sources
-// ---------------------------------------------------------------------------
-
-function SourcesView({ onBack, onEditSource }: { onBack: () => void; onEditSource?: (source: SnippetSource) => void }) {
-  const [sources, setSources] = useState<SnippetSource[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [prefix, setPrefix] = useState(":");
-  const [prefixEdit, setPrefixEdit] = useState(":");
-  const { showToast } = useToast();
-
-  const refreshSources = useCallback(async () => {
-    try {
-      const [srcs, pfx] = await Promise.all([
-        listSnippetSources(),
-        getExpandPrefix(),
-      ]);
-      setSources(srcs);
-      setPrefix(pfx);
-      setPrefixEdit(pfx);
-    } catch (err) {
-      console.error("Failed to load sources:", err);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    refreshSources();
-  }, [refreshSources]);
-
-  const handleAddSource = useCallback(async () => {
-    try {
-      const selected = await openDialog({ directory: true, title: "Choose folder or file for expansion config" });
-      if (!selected) return;
-      const path = typeof selected === "string" ? selected : (selected as any);
-      if (!path) return;
-      const name = window.prompt("Package name:", path.split("/").pop() || "snippets");
-      if (!name) return;
-      const isFolder = !path.endsWith(".yml") && !path.endsWith(".yaml");
-      await addSnippetSource(name, path, isFolder);
-      showToast("Source added and synced");
-      refreshSources();
-    } catch (err) {
-      console.error("Add source failed:", err);
-      showToast(`Failed: ${err}`);
-    }
-  }, [showToast, refreshSources]);
-
-  const handleBoilerplate = useCallback(async () => {
-    try {
-      const folder = await openDialog({ directory: true, title: "Choose folder for new expansion config" });
-      if (!folder) return;
-      const path = typeof folder === "string" ? folder : (folder as any);
-      if (!path) return;
-      const name = window.prompt("Package name:", path.split("/").pop() || "snippets");
-      if (!name) return;
-      await createBoilerplateConfig(path, name);
-      showToast(`Created dispatch-snippets.yml in ${path}`);
-      refreshSources();
-    } catch (err: any) {
-      console.error("Boilerplate failed:", err);
-      showToast(`Failed: ${err}`);
-    }
-  }, [showToast, refreshSources]);
-
-  const handleSync = useCallback(async (id: string) => {
-    try {
-      const result = await syncSnippetSource(id);
-      showToast(`Synced: +${result.added} ~${result.updated} -${result.removed}`);
-      refreshSources();
-    } catch (err) {
-      console.error("Sync failed:", err);
-    }
-  }, [showToast, refreshSources]);
-
-  const handleRemove = useCallback(async (id: string) => {
-    try {
-      await removeSnippetSource(id);
-      showToast("Source removed");
-      refreshSources();
-    } catch (err) {
-      console.error("Remove failed:", err);
-    }
-  }, [showToast, refreshSources]);
-
-  const handleToggleEnabled = useCallback(async (source: SnippetSource) => {
-    try {
-      await updateSnippetSource(source.id, { isEnabled: source.is_enabled === 0 });
-      await refreshTriggers();
-      refreshSources();
-    } catch (err) {
-      console.error("Toggle failed:", err);
-    }
-  }, [refreshSources]);
-
-  const handleSavePrefix = useCallback(async () => {
-    try {
-      await setExpandPrefixApi(prefixEdit);
-      setPrefix(prefixEdit);
-      showToast(`Prefix updated to "${prefixEdit}"`);
-    } catch (err: any) {
-      showToast(`Invalid prefix: ${err}`);
-    }
-  }, [prefixEdit, showToast]);
-
-  return (
-    <div className="flex flex-col h-screen bg-surface">
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-border-subtle bg-surface shrink-0">
-        <button
-          onClick={onBack}
-          className="flex items-center gap-1 text-xs text-text-secondary hover:text-text-primary transition-colors"
-        >
-          <ChevronLeftIcon />
-          Back
-        </button>
-        <span className="text-sm font-semibold text-text-primary">Sources & Settings</span>
-      </div>
-
-      <div className="flex-1 overflow-y-auto">
-        {/* Expand Prefix Setting */}
-        <div className="px-4 py-3 border-b border-border-subtle">
-          <label className="block text-xs font-semibold text-text-secondary mb-2">
-            Trigger Prefix
-          </label>
-          <p className="text-[10px] text-text-tertiary mb-2">
-            Character(s) that activate expansion mode in the command palette.
-          </p>
-          <div className="flex items-center gap-2">
-            <input
-              type="text"
-              value={prefixEdit}
-              onChange={(e) => setPrefixEdit(e.target.value)}
-              maxLength={3}
-              className="w-16 bg-surface-overlay border border-border-subtle rounded-md px-3 py-1.5 text-sm text-text-primary font-mono text-center focus:outline-none focus:border-accent/50 transition-colors"
-            />
-            {prefixEdit !== prefix && (
-              <button
-                onClick={handleSavePrefix}
-                className="text-xs text-accent hover:text-accent-hover transition-colors"
-              >
-                Save
-              </button>
-            )}
-            <span className="text-[10px] text-text-tertiary ml-2">
-              Current: <code className="font-mono text-accent">{prefix}</code>
-            </span>
-          </div>
-        </div>
-
-        {/* Sources List */}
-        <div className="px-4 py-3">
-          <div className="flex items-center justify-between mb-3">
-            <label className="text-xs font-semibold text-text-secondary">
-              External Sources
-            </label>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleBoilerplate}
-                className="text-[11px] text-accent hover:text-accent-hover transition-colors"
-              >
-                New Config File
-              </button>
-              <button
-                onClick={handleAddSource}
-                className="text-[11px] text-accent hover:text-accent-hover transition-colors"
-              >
-                Import Source
-              </button>
-            </div>
-          </div>
-
-          {loading ? (
-            <p className="text-xs text-text-tertiary">Loading sources...</p>
-          ) : sources.length === 0 ? (
-            <div className="py-6 text-center">
-              <p className="text-xs text-text-tertiary mb-2">No external sources configured.</p>
-              <p className="text-[10px] text-text-tertiary">
-                Add a YAML config file or folder, or create a new one with "New Config File".
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {sources.map((source) => (
-                <div
-                  key={source.id}
-                  className={`rounded-lg bg-surface-raised border border-border-subtle p-3 transition-opacity ${!source.is_enabled ? "opacity-50" : ""}`}
-                >
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-medium text-text-primary">
-                      {source.name}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      {onEditSource && (
-                        <button
-                          onClick={() => onEditSource(source)}
-                          className="text-[10px] text-accent hover:text-accent-hover transition-colors"
-                        >
-                          Edit
-                        </button>
-                      )}
-                      <button
-                        onClick={() => handleSync(source.id)}
-                        className="text-[10px] text-accent hover:text-accent-hover transition-colors"
-                      >
-                        Sync
-                      </button>
-                      <button
-                        onClick={() => handleToggleEnabled(source)}
-                        className={`text-[10px] transition-colors ${source.is_enabled ? "text-success" : "text-text-tertiary"}`}
-                      >
-                        {source.is_enabled ? "Enabled" : "Disabled"}
-                      </button>
-                      <button
-                        onClick={() => handleRemove(source.id)}
-                        className="text-[10px] text-error hover:text-red-400 transition-colors"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  </div>
-                  <p className="text-[10px] font-mono text-text-tertiary truncate">
-                    {source.path}
-                  </p>
-                  <div className="flex items-center gap-3 mt-1">
-                    <span className="text-[10px] text-text-tertiary">
-                      {source.is_folder ? "Folder" : "File"}
-                    </span>
-                    {source.last_synced_at && (
-                      <span className="text-[10px] text-text-tertiary">
-                        Last synced: {new Date(source.last_synced_at).toLocaleString()}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// SourceFileEditor — edit YAML source file inline
-// ---------------------------------------------------------------------------
-
-function SourceFileEditor({
-  source,
-  onBack,
-  onSaved,
-}: {
-  source: SnippetSource;
-  onBack: () => void;
-  onSaved: () => void;
-}) {
-  const [content, setContent] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [dirty, setDirty] = useState(false);
-  const { showToast } = useToast();
-
-  useEffect(() => {
-    readSourceFile(source.id)
-      .then((text) => {
-        setContent(text);
-        setLoading(false);
-      })
-      .catch((err) => {
-        setError(`Failed to read file: ${err}`);
-        setLoading(false);
-      });
-  }, [source.id]);
-
-  const handleSave = useCallback(async () => {
-    setSaving(true);
-    setError(null);
-    try {
-      const result = await writeSourceFile(source.id, content);
-      setDirty(false);
-      showToast(`Saved — +${result.added} added, ~${result.updated} updated, -${result.removed} removed`);
-      onSaved();
-    } catch (err: any) {
-      setError(String(err));
-    } finally {
-      setSaving(false);
-    }
-  }, [source.id, content, showToast, onSaved]);
-
-  return (
-    <div className="flex flex-col h-screen bg-surface">
-      {/* Top bar */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle bg-surface shrink-0">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={onBack}
-            className="flex items-center gap-1 text-xs text-text-secondary hover:text-text-primary transition-colors"
-          >
-            <ChevronLeftIcon />
-            Sources
-          </button>
-          <span className="text-sm font-semibold text-text-primary">{source.name}</span>
-        </div>
-        <button
-          onClick={handleSave}
-          disabled={saving || !dirty}
-          className="text-xs text-white bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors px-3 py-1.5 rounded-md"
-        >
-          {saving ? "Saving..." : "Save"}
-        </button>
-      </div>
-
-      {/* Editor */}
-      {loading ? (
-        <div className="flex-1 flex items-center justify-center">
-          <p className="text-sm text-text-tertiary">Loading file...</p>
-        </div>
-      ) : (
-        <div className="flex-1 overflow-hidden flex flex-col">
-          <textarea
-            value={content}
-            onChange={(e) => {
-              setContent(e.target.value);
-              setDirty(true);
-              setError(null);
-            }}
-            spellCheck={false}
-            className="flex-1 w-full bg-surface-overlay px-4 py-3 text-xs text-text-primary font-mono leading-relaxed focus:outline-none resize-none"
-          />
-        </div>
-      )}
-
-      {/* Status bar */}
-      <div className="px-4 py-2 border-t border-border-subtle bg-surface shrink-0">
-        {error ? (
-          <p className="text-[11px] text-error">{error}</p>
-        ) : (
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] text-text-tertiary font-mono truncate">
-              {source.path}
-            </span>
-            <span className="text-[10px] text-text-tertiary">
-              {dirty ? "Modified" : "Saved"}
-              {source.last_synced_at && ` · Last synced: ${new Date(source.last_synced_at).toLocaleString()}`}
-            </span>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // FieldLabel — label with inline copy button
@@ -1809,20 +1264,3 @@ function ChevronLeftIcon() {
   );
 }
 
-function CloseIcon() {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <line x1="18" y1="6" x2="6" y2="18" />
-      <line x1="6" y1="6" x2="18" y2="18" />
-    </svg>
-  );
-}

@@ -109,6 +109,10 @@ export async function createBoilerplateConfig(folderPath: string, packageName: s
   return invoke("create_boilerplate_config", { folderPath, packageName });
 }
 
+export async function ensureDefaultSource(): Promise<SnippetSource> {
+  return invoke("ensure_default_source");
+}
+
 export async function refreshTriggers(): Promise<void> {
   return invoke("refresh_triggers");
 }

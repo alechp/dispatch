@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { NotificationResponse, ProjectSession, QueryFilters, HotkeyConfig } from "./types";
+import type { NotificationResponse, ProjectSession, QueryFilters, HotkeyConfig, NotificationBannerConfig } from "./types";
+import { DEFAULT_BANNER_CONFIG } from "./types";
 
 export async function getNotifications(
   filters: QueryFilters = {}
@@ -63,4 +64,17 @@ export async function getYaptureSyncEnabled(): Promise<boolean> {
 
 export async function setYaptureSyncEnabled(enabled: boolean): Promise<void> {
   return invoke("set_yapture_sync_enabled", { enabled });
+}
+
+export async function getNotificationBannerConfig(): Promise<NotificationBannerConfig> {
+  try {
+    const json: string = await invoke("get_notification_banner_config");
+    return JSON.parse(json);
+  } catch {
+    return DEFAULT_BANNER_CONFIG;
+  }
+}
+
+export async function setNotificationBannerConfig(config: NotificationBannerConfig): Promise<void> {
+  return invoke("set_notification_banner_config", { configJson: JSON.stringify(config) });
 }

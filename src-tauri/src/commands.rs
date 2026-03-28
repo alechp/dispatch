@@ -14,6 +14,7 @@ use crate::trigger_cache;
 use crate::yapture;
 
 const BOILERPLATE_TEMPLATE: &str = include_str!("../templates/dispatch-snippets.yml");
+const DEFAULTS_TEMPLATE: &str = include_str!("../templates/dispatch-defaults.yml");
 
 #[tauri::command]
 pub async fn get_notifications(
@@ -821,6 +822,34 @@ pub async fn copy_to_clipboard(text: String) -> Result<(), String> {
     .map_err(|e| format!("spawn_blocking failed: {}", e))?
 }
 
+// --- Notification Banner Config commands ---
+
+#[tauri::command]
+pub async fn get_notification_banner_config(
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    let val = db::get_setting(&state.db, "notification_banner_config")
+        .await
+        .map_err(|e| e.to_string())?;
+    match val {
+        Some(json) => Ok(json),
+        None => Ok(r#"{"globalEnabled":true,"screens":{"feed/notifications":true,"feed/sessions":true,"telemetry":true,"expander":true,"settings":true}}"#.to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn set_notification_banner_config(
+    state: State<'_, Arc<AppState>>,
+    config_json: String,
+) -> Result<(), String> {
+    // Validate that it's valid JSON
+    let _: serde_json::Value = serde_json::from_str(&config_json)
+        .map_err(|e| format!("Invalid JSON: {}", e))?;
+    db::set_setting(&state.db, "notification_banner_config", &config_json)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn get_yapture_sync_enabled(
     state: State<'_, Arc<AppState>>,
@@ -1080,6 +1109,48 @@ pub async fn create_boilerplate_config(
     .map_err(|e| e.to_string())?;
 
     // Initial sync
+    let _ = sync_source_internal(&state.db, &source).await;
+    let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
+
+    Ok(source)
+}
+
+/// Ensure the built-in "Defaults" snippet source exists.
+/// Writes the template to app data dir if the file is missing, creates the DB source if needed, and syncs.
+#[tauri::command]
+pub async fn ensure_default_source(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<models::SnippetSource, String> {
+    use tauri::Manager;
+
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let defaults_path = app_data_dir.join("dispatch-defaults.yml");
+
+    // Write template file if it doesn't exist on disk
+    if !defaults_path.exists() {
+        std::fs::write(&defaults_path, DEFAULTS_TEMPLATE)
+            .map_err(|e| format!("Failed to write defaults: {}", e))?;
+    }
+
+    let path_str = defaults_path.to_string_lossy().to_string();
+
+    // Check if a source with this path already exists
+    let sources = db::list_snippet_sources(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let existing = sources.iter().find(|s| s.path == path_str);
+
+    let source = if let Some(s) = existing {
+        s.clone()
+    } else {
+        db::create_snippet_source(&state.db, "Defaults", &path_str, false)
+            .await
+            .map_err(|e| e.to_string())?
+    };
+
+    // Sync it
     let _ = sync_source_internal(&state.db, &source).await;
     let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
 
