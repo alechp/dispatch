@@ -28,7 +28,9 @@ import {
   getExpandPrefix,
   setExpandPrefix as setExpandPrefixApi,
   ensureDefaultSource,
+  getTriggerCacheCount,
 } from "../lib/snippets";
+import { CodeEditor } from "./CodeEditor";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { copyToClipboard } from "../lib/liveExpansion";
 import { useToast } from "../hooks/useToast";
@@ -706,6 +708,17 @@ function ExpansionSourcesTab() {
   );
 }
 
+import { parse as parseToml } from "smol-toml";
+
+function tomlToJson(tomlStr: string): string {
+  try {
+    const obj = parseToml(tomlStr);
+    return JSON.stringify(obj, null, 2);
+  } catch (e: any) {
+    return `// Parse error: ${e.message || e}`;
+  }
+}
+
 function SourceFileEditor({
   source,
   onBack,
@@ -720,7 +733,15 @@ function SourceFileEditor({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [editorMode, setEditorMode] = useState<"toml" | "json">("toml");
+  const [vimEnabled, setVimEnabled] = useState(
+    () => localStorage.getItem("editor_vim_mode") === "1"
+  );
   const { showToast } = useToast();
+
+  // Detect if source is YAML (legacy) or TOML
+  const isToml = source.path.endsWith(".toml");
+  const sourceLanguage = isToml ? "toml" : "toml"; // Editor language mode
 
   useEffect(() => {
     readSourceFile(source.id)
@@ -740,7 +761,13 @@ function SourceFileEditor({
     try {
       const result = await writeSourceFile(source.id, content);
       setDirty(false);
-      showToast(`Saved — +${result.added} added, ~${result.updated} updated, -${result.removed} removed`);
+      // Show trigger cache count alongside sync result
+      let triggerInfo = "";
+      try {
+        const count = await getTriggerCacheCount();
+        triggerInfo = ` — ${count} triggers loaded`;
+      } catch {}
+      showToast(`Saved — +${result.added} ~${result.updated} -${result.removed}${triggerInfo}`);
       onSaved();
     } catch (err: any) {
       setError(String(err));
@@ -748,6 +775,22 @@ function SourceFileEditor({
       setSaving(false);
     }
   }, [source.id, content, showToast, onSaved]);
+
+  const handleCopy = useCallback(async () => {
+    const text = editorMode === "json" ? tomlToJson(content) : content;
+    await copyToClipboard(text);
+    showToast("Copied to clipboard");
+  }, [content, editorMode, showToast]);
+
+  const handleToggleVim = useCallback(() => {
+    setVimEnabled((prev) => {
+      const next = !prev;
+      localStorage.setItem("editor_vim_mode", next ? "1" : "0");
+      return next;
+    });
+  }, []);
+
+  const jsonPreview = editorMode === "json" ? tomlToJson(content) : "";
 
   return (
     <div className="space-y-3">
@@ -765,29 +808,86 @@ function SourceFileEditor({
           </button>
           <span className="text-sm font-semibold text-text-primary">{source.name}</span>
         </div>
-        <button
-          onClick={handleSave}
-          disabled={saving || !dirty}
-          className="text-xs text-white bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors px-3 py-1.5 rounded-md"
-        >
-          {saving ? "Saving..." : "Save"}
-        </button>
+        <div className="flex items-center gap-2">
+          {/* TOML / JSON toggle */}
+          {isToml && (
+            <div className="flex gap-0 border border-border-subtle rounded-md overflow-hidden">
+              <button
+                onClick={() => setEditorMode("toml")}
+                className={`text-[10px] px-2 py-0.5 transition-colors ${
+                  editorMode === "toml"
+                    ? "bg-accent/15 text-accent"
+                    : "bg-surface-overlay text-text-tertiary hover:text-text-secondary"
+                }`}
+              >
+                TOML
+              </button>
+              <button
+                onClick={() => setEditorMode("json")}
+                className={`text-[10px] px-2 py-0.5 transition-colors ${
+                  editorMode === "json"
+                    ? "bg-accent/15 text-accent"
+                    : "bg-surface-overlay text-text-tertiary hover:text-text-secondary"
+                }`}
+              >
+                JSON
+              </button>
+            </div>
+          )}
+
+          {/* Vim toggle */}
+          <button
+            onClick={handleToggleVim}
+            className={`text-[10px] px-2 py-0.5 rounded-md border transition-colors ${
+              vimEnabled
+                ? "bg-accent/15 text-accent border-accent/30"
+                : "bg-surface-overlay text-text-tertiary border-border-subtle"
+            }`}
+          >
+            Vim
+          </button>
+
+          {/* Copy button */}
+          <button
+            onClick={handleCopy}
+            className="p-1.5 text-text-tertiary hover:text-accent transition-colors rounded-md"
+            title="Copy to clipboard"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+              <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+            </svg>
+          </button>
+
+          {/* Save button */}
+          <button
+            onClick={handleSave}
+            disabled={saving || !dirty || editorMode === "json"}
+            className="text-xs text-white bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors px-3 py-1.5 rounded-md"
+          >
+            {saving ? "Saving..." : "Save"}
+          </button>
+        </div>
       </div>
 
       {/* Editor */}
       {loading ? (
         <p className="text-sm text-text-tertiary">Loading file...</p>
       ) : (
-        <textarea
-          value={content}
-          onChange={(e) => {
-            setContent(e.target.value);
-            setDirty(true);
-            setError(null);
-          }}
-          spellCheck={false}
-          rows={20}
-          className="w-full bg-surface-overlay border border-border-subtle rounded-md px-4 py-3 text-xs text-text-primary font-mono leading-relaxed focus:outline-none focus:border-accent/50 transition-colors resize-y"
+        <CodeEditor
+          value={editorMode === "json" ? jsonPreview : content}
+          onChange={
+            editorMode === "toml"
+              ? (val) => {
+                  setContent(val);
+                  setDirty(true);
+                  setError(null);
+                }
+              : undefined
+          }
+          language={editorMode === "json" ? "json" : sourceLanguage}
+          readOnly={editorMode === "json"}
+          vimEnabled={vimEnabled}
         />
       )}
 
@@ -800,6 +900,7 @@ function SourceFileEditor({
             {source.path}
           </span>
           <span className="text-[10px] text-text-tertiary">
+            {editorMode === "json" && "(read-only) · "}
             {dirty ? "Modified" : "Saved"}
             {source.last_synced_at && ` · Last synced: ${new Date(source.last_synced_at).toLocaleString()}`}
           </span>
