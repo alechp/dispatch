@@ -668,6 +668,7 @@ pub fn run() {
             commands::create_boilerplate_config,
             commands::ensure_default_source,
             commands::refresh_triggers,
+            commands::get_trigger_cache_count,
             commands::read_source_file,
             commands::write_source_file,
         ])

@@ -14,7 +14,7 @@ use crate::trigger_cache;
 use crate::yapture;
 
 const BOILERPLATE_TEMPLATE: &str = include_str!("../templates/dispatch-snippets.yml");
-const DEFAULTS_TEMPLATE: &str = include_str!("../templates/dispatch-defaults.yml");
+const DEFAULTS_TEMPLATE: &str = include_str!("../templates/dispatch-defaults.toml");
 
 #[tauri::command]
 pub async fn get_notifications(
@@ -1125,7 +1125,13 @@ pub async fn ensure_default_source(
     use tauri::Manager;
 
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let defaults_path = app_data_dir.join("dispatch-defaults.yml");
+    let defaults_path = app_data_dir.join("dispatch-defaults.toml");
+
+    // Migrate: if old .yml exists but .toml doesn't, rename it
+    let old_yml_path = app_data_dir.join("dispatch-defaults.yml");
+    if old_yml_path.exists() && !defaults_path.exists() {
+        let _ = std::fs::rename(&old_yml_path, &defaults_path);
+    }
 
     // Write template file if it doesn't exist on disk
     if !defaults_path.exists() {
@@ -1165,6 +1171,13 @@ pub async fn refresh_triggers(state: State<'_, Arc<AppState>>) -> Result<(), Str
 }
 
 #[tauri::command]
+pub async fn get_trigger_cache_count(
+    state: State<'_, Arc<AppState>>,
+) -> Result<usize, String> {
+    Ok(state.trigger_cache.read().len())
+}
+
+#[tauri::command]
 pub async fn read_source_file(
     state: State<'_, Arc<AppState>>,
     source_id: String,
@@ -1188,9 +1201,8 @@ pub async fn write_source_file(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Source not found".to_string())?;
 
-    // Validate YAML before writing
-    let _config: crate::file_parser::ExpansionConfig = serde_yaml::from_str(&content)
-        .map_err(|e| format!("Invalid YAML: {}", e))?;
+    // Validate content before writing (auto-detect TOML vs YAML by file extension)
+    let _config = crate::file_parser::validate_config_content(&content, &source.path)?;
 
     std::fs::write(&source.path, &content)
         .map_err(|e| format!("Failed to write {}: {}", source.path, e))?;

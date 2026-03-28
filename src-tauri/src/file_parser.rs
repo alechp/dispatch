@@ -27,16 +27,45 @@ pub struct ParsedVariable {
     pub params: std::collections::HashMap<String, serde_json::Value>,
 }
 
-/// Parse a single YAML expansion config file.
+/// Detect format by extension and parse accordingly.
 pub fn parse_expansion_file(path: &Path) -> Result<ExpansionConfig, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-    let config: ExpansionConfig = serde_yaml::from_str(&content)
-        .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))?;
-    Ok(config)
+
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    match ext.as_str() {
+        "toml" => {
+            let config: ExpansionConfig = toml::from_str(&content)
+                .map_err(|e| format!("Failed to parse TOML {}: {}", path.display(), e))?;
+            Ok(config)
+        }
+        _ => {
+            // Default to YAML for .yml, .yaml, or unknown
+            let config: ExpansionConfig = serde_yaml::from_str(&content)
+                .map_err(|e| format!("Failed to parse YAML {}: {}", path.display(), e))?;
+            Ok(config)
+        }
+    }
 }
 
-/// Parse all YAML files in a folder.
+/// Validate content string as either TOML or YAML based on file extension.
+pub fn validate_config_content(content: &str, path: &str) -> Result<ExpansionConfig, String> {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    match ext.as_str() {
+        "toml" => {
+            toml::from_str(content).map_err(|e| format!("Invalid TOML: {}", e))
+        }
+        _ => {
+            serde_yaml::from_str(content).map_err(|e| format!("Invalid YAML: {}", e))
+        }
+    }
+}
+
+/// Parse all expansion config files (YAML + TOML) in a folder.
 pub fn parse_expansion_folder(path: &Path) -> Result<Vec<(String, ExpansionConfig)>, String> {
     if !path.is_dir() {
         return Err(format!("{} is not a directory", path.display()));
@@ -51,7 +80,7 @@ pub fn parse_expansion_folder(path: &Path) -> Result<Vec<(String, ExpansionConfi
         let file_path = entry.path();
         if let Some(ext) = file_path.extension() {
             let ext_str = ext.to_string_lossy().to_lowercase();
-            if ext_str == "yml" || ext_str == "yaml" {
+            if ext_str == "yml" || ext_str == "yaml" || ext_str == "toml" {
                 match parse_expansion_file(&file_path) {
                     Ok(config) => {
                         let filename = file_path.file_name()
@@ -99,6 +128,7 @@ mod tests {
     use super::*;
 
     const BOILERPLATE_TEMPLATE: &str = include_str!("../templates/dispatch-snippets.yml");
+    const DEFAULTS_TOML_TEMPLATE: &str = include_str!("../templates/dispatch-defaults.toml");
 
     #[test]
     fn boilerplate_template_parses() {
@@ -125,6 +155,18 @@ mod tests {
         assert!(var_types.contains(&"form"), "Should have form variable example");
         assert!(var_types.contains(&"choice"), "Should have choice variable example");
         assert!(var_types.contains(&"clipboard"), "Should have clipboard variable example");
+    }
+
+    #[test]
+    fn defaults_toml_template_parses() {
+        let config: ExpansionConfig = toml::from_str(DEFAULTS_TOML_TEMPLATE)
+            .expect("Defaults TOML template must parse");
+        assert!(config.snippets.len() >= 5, "TOML template should have at least 5 snippets");
+        assert_eq!(config.name.as_deref(), Some("Defaults"));
+
+        // Verify date snippet exists
+        let date_snippet = config.snippets.iter().find(|s| s.trigger == ":date");
+        assert!(date_snippet.is_some(), "Should have :date snippet");
     }
 
     #[test]

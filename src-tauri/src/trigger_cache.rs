@@ -44,6 +44,13 @@ pub async fn refresh_trigger_cache(
     // Sort longest trigger first to prevent partial matches
     entries.sort_by(|a, b| b.trigger.len().cmp(&a.trigger.len()));
 
+    // Diagnostic logging
+    eprintln!(
+        "[trigger-cache] refreshed: {} entries, first 5: {:?}",
+        entries.len(),
+        entries.iter().take(5).map(|e| &e.trigger).collect::<Vec<_>>()
+    );
+
     let mut guard = cache.write();
     *guard = entries;
     Ok(())
