@@ -12,7 +12,18 @@ import {
   type YaptureConfig,
   type YaptureConnectionStatus,
 } from "../lib/yapture";
-import { getYaptureSyncEnabled, setYaptureSyncEnabled, getNotificationBannerConfig, setNotificationBannerConfig, detectYaptureVersion } from "../lib/api";
+import {
+  getYaptureSyncEnabled,
+  setYaptureSyncEnabled,
+  getNotificationBannerConfig,
+  setNotificationBannerConfig,
+  getYaptureV2Status,
+  yaptureV2StartOAuth,
+  yaptureV2Disconnect,
+  setYaptureV2Config,
+  testYaptureV2Connection,
+  type YaptureV2Status,
+} from "../lib/api";
 import {
   importSnippets,
   exportSnippets,
@@ -61,6 +72,7 @@ function envFromUrl(url: string): YaptureEnv {
 }
 
 function YaptureTab() {
+  // ── v1 state ──
   const [config, setConfig] = useState<YaptureConfig | null>(null);
   const [connection, setConnection] = useState<YaptureConnectionStatus | null>(null);
   const [testResult, setTestResult] = useState<"idle" | "testing" | "success" | "error">("idle");
@@ -68,18 +80,36 @@ function YaptureTab() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [syncEnabled, setSyncEnabled] = useState(true);
-  const [yaptureVersion, setYaptureVersion] = useState<string>("");
+
+  // ── v2 state ──
+  const [v2Status, setV2Status] = useState<YaptureV2Status | null>(null);
+  const [v2Connecting, setV2Connecting] = useState(false);
+  const [v2TestResult, setV2TestResult] = useState<"idle" | "testing" | "success" | "error">("idle");
+  const [v2ApiUrl, setV2ApiUrl] = useState("");
+  const [v2AuthUrl, setV2AuthUrl] = useState("");
+
   const { showToast } = useToast();
 
   useEffect(() => {
     loadState();
   }, []);
 
-  // Listen for OAuth callback
+  // Listen for v1 OAuth callback
   useEffect(() => {
     const unlisten = listen<YaptureConnectionStatus>("yapture-connected", (event) => {
       setConnection(event.payload);
       setConnecting(false);
+      loadState();
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  // Listen for v2 OAuth callback
+  useEffect(() => {
+    const unlisten = listen("yapture-v2-connected", () => {
+      setV2Connecting(false);
       loadState();
     });
     return () => {
@@ -100,32 +130,33 @@ function YaptureTab() {
         const sync = await getYaptureSyncEnabled();
         setSyncEnabled(sync);
       } catch {}
-      // Load version when connected
-      if (conn.connected) {
-        try {
-          const v = await detectYaptureVersion();
-          setYaptureVersion(v);
-        } catch {}
-      }
+      // Load v2 status
+      try {
+        const v2 = await getYaptureV2Status();
+        setV2Status(v2);
+        setV2ApiUrl(v2.apiUrl);
+        setV2AuthUrl(v2.authUrl);
+      } catch {}
     } catch (e) {
       console.error("[yapture-settings] loadState failed:", e);
     }
   }
+
+  // ── v1 handlers ──
 
   async function handleConnect() {
     setConnecting(true);
     try {
       const url = await yaptureStartOAuth();
       await openUrl(url);
-      // Auto-cancel "Connecting..." after 60s if OAuth callback hasn't fired
       setTimeout(() => {
         setConnecting((prev) => {
-          if (prev) console.warn("[yapture] OAuth timed out after 60s");
+          if (prev) console.warn("[yapture] v1 OAuth timed out after 60s");
           return false;
         });
       }, 60_000);
     } catch (e) {
-      console.error("OAuth start failed:", e);
+      console.error("v1 OAuth start failed:", e);
       setConnecting(false);
     }
   }
@@ -152,7 +183,6 @@ function YaptureTab() {
     setTestResult("testing");
     try {
       let ok = await testYaptureConnection();
-      // If test fails, try refreshing the token and retry
       if (!ok) {
         const refreshed = await yaptureRefresh();
         if (refreshed) {
@@ -172,6 +202,59 @@ function YaptureTab() {
     await setYaptureSyncEnabled(newVal);
   }
 
+  // ── v2 handlers ──
+
+  async function handleV2Connect() {
+    setV2Connecting(true);
+    try {
+      const url = await yaptureV2StartOAuth();
+      await openUrl(url);
+      setTimeout(() => {
+        setV2Connecting((prev) => {
+          if (prev) console.warn("[yapture] v2 OAuth timed out after 60s");
+          return false;
+        });
+      }, 60_000);
+    } catch (e: any) {
+      showToast("Failed to start v2 OAuth: " + e);
+      setV2Connecting(false);
+    }
+  }
+
+  async function handleV2Disconnect() {
+    await yaptureV2Disconnect();
+    await loadState();
+  }
+
+  async function handleV2EnabledToggle() {
+    if (!v2Status) return;
+    await setYaptureV2Config({ enabled: !v2Status.enabled });
+    await loadState();
+  }
+
+  async function handleV2TestConnection() {
+    setV2TestResult("testing");
+    try {
+      const ok = await testYaptureV2Connection();
+      setV2TestResult(ok ? "success" : "error");
+    } catch {
+      setV2TestResult("error");
+    }
+    setTimeout(() => setV2TestResult("idle"), 3000);
+  }
+
+  async function handleV2ApiUrlSave() {
+    await setYaptureV2Config({ apiUrl: v2ApiUrl });
+    showToast("V2 API URL updated");
+    await loadState();
+  }
+
+  async function handleV2AuthUrlSave() {
+    await setYaptureV2Config({ authUrl: v2AuthUrl });
+    showToast("V2 Auth URL updated");
+    await loadState();
+  }
+
   if (!config || !connection) {
     return (
       <div className="flex-1 flex items-center justify-center">
@@ -182,193 +265,302 @@ function YaptureTab() {
 
   return (
     <div className="space-y-4">
-      {connection.connected ? (
-        <>
-          {/* Connection status */}
-          <div className="bg-surface-raised border border-border-subtle rounded-lg p-4">
-            <div className="flex items-start justify-between">
-              <div>
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-success" />
-                  <span className="text-sm font-medium text-text-primary">
-                    Connected as {connection.userName || "Unknown"}
-                  </span>
+      {/* ── Yapture v1 Section ── */}
+      <div>
+        <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2 px-1">
+          Yapture v1
+        </h3>
+
+        {connection.connected ? (
+          <div className="space-y-3">
+            {/* v1 connection status card */}
+            <div className="bg-surface-raised border border-border-subtle rounded-lg p-4">
+              <div className="flex items-start justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full bg-success" />
+                    <span className="text-sm font-medium text-text-primary">
+                      Connected as {connection.userName || "Unknown"}
+                    </span>
+                  </div>
+                  {connection.userEmail && (
+                    <p className="text-xs text-text-secondary mt-1 ml-4">{connection.userEmail}</p>
+                  )}
                 </div>
-                {connection.userEmail && (
-                  <p className="text-xs text-text-secondary mt-1 ml-4">{connection.userEmail}</p>
-                )}
+                <button
+                  onClick={handleDisconnect}
+                  className="text-xs text-text-tertiary hover:text-error transition-colors"
+                >
+                  Disconnect
+                </button>
               </div>
+            </div>
+
+            {/* v1 enabled toggle */}
+            <div className="flex items-center justify-between px-1">
+              <span className="text-sm text-text-primary">Enabled</span>
               <button
-                onClick={handleDisconnect}
-                className="text-xs text-text-tertiary hover:text-error transition-colors"
+                onClick={handleToggleEnabled}
+                className={`relative w-10 h-5 rounded-full transition-colors ${
+                  config.enabled ? "bg-accent" : "bg-surface-overlay border border-border-subtle"
+                }`}
               >
-                Disconnect
+                <span
+                  className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                    config.enabled ? "translate-x-5" : ""
+                  }`}
+                />
               </button>
             </div>
-          </div>
 
-          {/* API Version */}
-          <div className="flex items-center justify-between py-2 px-1">
-              <span className="text-xs text-text-secondary">API Version</span>
-              <div className="flex items-center gap-2">
-                  <span className="text-xs font-mono text-text-primary">{yaptureVersion || "unknown"}</span>
-                  <button
-                      onClick={async () => {
-                          try {
-                              const v = await detectYaptureVersion();
-                              setYaptureVersion(v);
-                              showToast(`Detected Yapture ${v}`);
-                          } catch {
-                              showToast("Detection failed");
-                          }
-                      }}
-                      className="text-[10px] px-2 py-0.5 rounded bg-bg-tertiary text-text-secondary hover:text-text-primary"
-                  >
-                      Detect
-                  </button>
-              </div>
-          </div>
-
-          {/* Enabled toggle */}
-          <div className="flex items-center justify-between px-1">
-            <span className="text-sm text-text-primary">Enabled</span>
-            <button
-              onClick={handleToggleEnabled}
-              className={`relative w-10 h-5 rounded-full transition-colors ${
-                config.enabled ? "bg-accent" : "bg-surface-overlay border border-border-subtle"
-              }`}
-            >
-              <span
-                className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                  config.enabled ? "translate-x-5" : ""
-                }`}
-              />
-            </button>
-          </div>
-
-          {/* Bidirectional sync toggle */}
-          <div className="flex items-center justify-between px-1">
-            <div>
-              <span className="text-sm text-text-primary">Bidirectional Sync</span>
-              <p className="text-[10px] text-text-tertiary mt-0.5">
-                Clearing or focusing terminal completes the Yapture task
-              </p>
-            </div>
-            <button
-              onClick={handleToggleSync}
-              className={`relative w-10 h-5 rounded-full transition-colors ${
-                syncEnabled ? "bg-accent" : "bg-surface-overlay border border-border-subtle"
-              }`}
-            >
-              <span
-                className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                  syncEnabled ? "translate-x-5" : ""
-                }`}
-              />
-            </button>
-          </div>
-
-          {/* Test connection */}
-          <div className="flex items-center gap-3">
-            <button
-              onClick={handleTestConnection}
-              disabled={testResult === "testing"}
-              className="px-4 py-1.5 text-xs font-medium text-text-primary bg-surface-overlay border border-border-subtle rounded-md hover:border-accent/30 transition-colors disabled:opacity-50"
-            >
-              {testResult === "testing" ? "Testing..." : "Test Connection"}
-            </button>
-            {testResult === "success" && (
-              <span className="text-xs text-success">Connected</span>
-            )}
-            {testResult === "error" && (
-              <span className="text-xs text-error">Connection failed</span>
-            )}
-          </div>
-
-          {/* Advanced: environment selector */}
-          <div className="border-t border-border-subtle pt-4">
-            <button
-              onClick={() => setShowAdvanced(!showAdvanced)}
-              className="flex items-center gap-1 text-xs text-text-tertiary hover:text-text-secondary transition-colors"
-            >
-              <svg
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className={`transition-transform ${showAdvanced ? "rotate-90" : ""}`}
+            {/* v1 test connection */}
+            <div className="flex items-center gap-3 px-1">
+              <button
+                onClick={handleTestConnection}
+                disabled={testResult === "testing"}
+                className="px-4 py-1.5 text-xs font-medium text-text-primary bg-surface-overlay border border-border-subtle rounded-md hover:border-accent/30 transition-colors disabled:opacity-50"
               >
-                <polyline points="9 18 15 12 9 6" />
-              </svg>
-              Advanced
-            </button>
-            {showAdvanced && (
-              <div className="mt-3 space-y-3">
-                <div className="space-y-1.5">
-                  <label className="text-xs text-text-secondary">Environment</label>
-                  <div className="flex gap-1">
-                    {(["production", "staging", "local"] as YaptureEnv[]).map((e) => (
-                      <button
-                        key={e}
-                        onClick={() => handleEnvChange(e)}
-                        className={`px-3 py-1 text-[11px] rounded-md border transition-colors ${
-                          env === e
-                            ? "bg-accent/15 text-accent border-accent/30"
-                            : "bg-surface-overlay text-text-secondary border-border-subtle hover:border-accent/30"
-                        }`}
-                      >
-                        {e.charAt(0).toUpperCase() + e.slice(1)}
-                      </button>
-                    ))}
-                  </div>
-                  <p className="text-[10px] text-text-tertiary">{ENV_URLS[env]}</p>
-                </div>
-              </div>
-            )}
+                {testResult === "testing" ? "Testing..." : "Test Connection"}
+              </button>
+              {testResult === "success" && (
+                <span className="text-xs text-success">Connected</span>
+              )}
+              {testResult === "error" && (
+                <span className="text-xs text-error">Connection failed</span>
+              )}
+            </div>
           </div>
-        </>
-      ) : (
-        <>
-          {/* OAuth connect — primary action */}
+        ) : (
           <div className="bg-surface-raised border border-border-subtle rounded-lg p-4">
             <p className="text-xs text-text-secondary mb-3">
-              Connect your Yapture account to push notifications as tasks.
+              Connect your Yapture v1 account to push notifications as tasks.
             </p>
             <button
               onClick={handleConnect}
               disabled={connecting}
               className="w-full px-4 py-2 text-sm font-medium text-white bg-accent hover:bg-accent-hover rounded-md transition-colors disabled:opacity-50"
             >
-              {connecting ? "Connecting..." : "Connect with Yapture"}
+              {connecting ? "Connecting..." : "Connect with Yapture v1"}
             </button>
           </div>
+        )}
+      </div>
 
-          {/* Environment selector (no manual API/token fields) */}
-          <div className="space-y-1.5 px-1">
-            <label className="text-xs text-text-secondary">Environment</label>
-            <div className="flex gap-1">
-              {(["production", "staging", "local"] as YaptureEnv[]).map((e) => (
+      {/* ── Yapture v2 Section ── */}
+      <div>
+        <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2 px-1">
+          Yapture v2
+        </h3>
+
+        {v2Status?.connected ? (
+          <div className="space-y-3">
+            {/* v2 connection status card */}
+            <div className="bg-surface-raised border border-border-subtle rounded-lg p-4">
+              <div className="flex items-start justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full bg-success" />
+                    <span className="text-sm font-medium text-text-primary">
+                      Connected as {v2Status.userName || "Unknown"}
+                    </span>
+                  </div>
+                  {v2Status.userEmail && (
+                    <p className="text-xs text-text-secondary mt-1 ml-4">{v2Status.userEmail}</p>
+                  )}
+                </div>
                 <button
-                  key={e}
-                  onClick={() => handleEnvChange(e)}
-                  className={`px-3 py-1 text-[11px] rounded-md border transition-colors ${
-                    env === e
-                      ? "bg-accent/15 text-accent border-accent/30"
-                      : "bg-surface-overlay text-text-secondary border-border-subtle hover:border-accent/30"
-                  }`}
+                  onClick={handleV2Disconnect}
+                  className="text-xs text-text-tertiary hover:text-error transition-colors"
                 >
-                  {e.charAt(0).toUpperCase() + e.slice(1)}
+                  Disconnect
                 </button>
-              ))}
+              </div>
             </div>
-            <p className="text-[10px] text-text-tertiary">{ENV_URLS[env]}</p>
+
+            {/* v2 enabled toggle */}
+            <div className="flex items-center justify-between px-1">
+              <span className="text-sm text-text-primary">Enabled</span>
+              <button
+                onClick={handleV2EnabledToggle}
+                className={`relative w-10 h-5 rounded-full transition-colors ${
+                  v2Status.enabled ? "bg-accent" : "bg-surface-overlay border border-border-subtle"
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                    v2Status.enabled ? "translate-x-5" : ""
+                  }`}
+                />
+              </button>
+            </div>
+
+            {/* v2 test connection */}
+            <div className="flex items-center gap-3 px-1">
+              <button
+                onClick={handleV2TestConnection}
+                disabled={v2TestResult === "testing"}
+                className="px-4 py-1.5 text-xs font-medium text-text-primary bg-surface-overlay border border-border-subtle rounded-md hover:border-accent/30 transition-colors disabled:opacity-50"
+              >
+                {v2TestResult === "testing" ? "Testing..." : "Test Connection"}
+              </button>
+              {v2TestResult === "success" && (
+                <span className="text-xs text-success">Connected</span>
+              )}
+              {v2TestResult === "error" && (
+                <span className="text-xs text-error">Connection failed</span>
+              )}
+            </div>
           </div>
-        </>
-      )}
+        ) : (
+          <div className="bg-surface-raised border border-border-subtle rounded-lg p-4">
+            <p className="text-xs text-text-secondary mb-3">
+              Connect your Yapture v2 account for the latest sync features.
+            </p>
+            <button
+              onClick={handleV2Connect}
+              disabled={v2Connecting}
+              className="w-full px-4 py-2 text-sm font-medium text-white bg-accent hover:bg-accent-hover rounded-md transition-colors disabled:opacity-50"
+            >
+              {v2Connecting ? "Connecting..." : "Connect with Yapture v2"}
+            </button>
+          </div>
+        )}
+
+        {/* v2 enabled toggle (when not connected) */}
+        {v2Status && !v2Status.connected && (
+          <div className="flex items-center justify-between px-1 mt-3">
+            <span className="text-sm text-text-primary">Enabled</span>
+            <button
+              onClick={handleV2EnabledToggle}
+              className={`relative w-10 h-5 rounded-full transition-colors ${
+                v2Status.enabled ? "bg-accent" : "bg-surface-overlay border border-border-subtle"
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                  v2Status.enabled ? "translate-x-5" : ""
+                }`}
+              />
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ── Shared Settings ── */}
+      <div className="border-t border-border-subtle pt-4">
+        {/* Bidirectional sync toggle */}
+        <div className="flex items-center justify-between px-1">
+          <div>
+            <span className="text-sm text-text-primary">Bidirectional Sync</span>
+            <p className="text-[10px] text-text-tertiary mt-0.5">
+              Clearing or focusing terminal completes the Yapture task
+            </p>
+          </div>
+          <button
+            onClick={handleToggleSync}
+            className={`relative w-10 h-5 rounded-full transition-colors ${
+              syncEnabled ? "bg-accent" : "bg-surface-overlay border border-border-subtle"
+            }`}
+          >
+            <span
+              className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                syncEnabled ? "translate-x-5" : ""
+              }`}
+            />
+          </button>
+        </div>
+      </div>
+
+      {/* ── Advanced ── */}
+      <div className="border-t border-border-subtle pt-4">
+        <button
+          onClick={() => setShowAdvanced(!showAdvanced)}
+          className="flex items-center gap-1 text-xs text-text-tertiary hover:text-text-secondary transition-colors"
+        >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={`transition-transform ${showAdvanced ? "rotate-90" : ""}`}
+          >
+            <polyline points="9 18 15 12 9 6" />
+          </svg>
+          Advanced
+        </button>
+        {showAdvanced && (
+          <div className="mt-3 space-y-4">
+            {/* v1 environment selector */}
+            <div className="space-y-1.5">
+              <label className="text-xs text-text-secondary">V1 Environment</label>
+              <div className="flex gap-1">
+                {(["production", "staging", "local"] as YaptureEnv[]).map((e) => (
+                  <button
+                    key={e}
+                    onClick={() => handleEnvChange(e)}
+                    className={`px-3 py-1 text-[11px] rounded-md border transition-colors ${
+                      env === e
+                        ? "bg-accent/15 text-accent border-accent/30"
+                        : "bg-surface-overlay text-text-secondary border-border-subtle hover:border-accent/30"
+                    }`}
+                  >
+                    {e.charAt(0).toUpperCase() + e.slice(1)}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] text-text-tertiary">{ENV_URLS[env]}</p>
+            </div>
+
+            {/* v2 API URL */}
+            <div className="space-y-1.5">
+              <label className="text-xs text-text-secondary">V2 API URL</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={v2ApiUrl}
+                  onChange={(e) => setV2ApiUrl(e.target.value)}
+                  placeholder="https://api.v2.yapture.app"
+                  className="flex-1 bg-surface-overlay border border-border-subtle rounded-md px-3 py-1.5 text-xs text-text-primary font-mono focus:outline-none focus:border-accent/50 transition-colors"
+                />
+                {v2Status && v2ApiUrl !== v2Status.apiUrl && (
+                  <button
+                    onClick={handleV2ApiUrlSave}
+                    className="text-xs text-accent hover:text-accent-hover transition-colors"
+                  >
+                    Save
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* v2 Auth URL */}
+            <div className="space-y-1.5">
+              <label className="text-xs text-text-secondary">V2 Auth URL</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={v2AuthUrl}
+                  onChange={(e) => setV2AuthUrl(e.target.value)}
+                  placeholder="http://localhost:4800"
+                  className="flex-1 bg-surface-overlay border border-border-subtle rounded-md px-3 py-1.5 text-xs text-text-primary font-mono focus:outline-none focus:border-accent/50 transition-colors"
+                />
+                {v2Status && v2AuthUrl !== v2Status.authUrl && (
+                  <button
+                    onClick={handleV2AuthUrlSave}
+                    className="text-xs text-accent hover:text-accent-hover transition-colors"
+                  >
+                    Save
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

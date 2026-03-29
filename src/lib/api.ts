@@ -82,3 +82,38 @@ export async function setNotificationBannerConfig(config: NotificationBannerConf
 export async function detectYaptureVersion(): Promise<string> {
   return invoke<string>("yapture_detect_version");
 }
+
+// ── Yapture v2 API ──────────────────────────────────────────────────
+
+export interface YaptureV2Status {
+  connected: boolean;
+  enabled: boolean;
+  userName: string | null;
+  userEmail: string | null;
+  apiUrl: string;
+  authUrl: string;
+}
+
+export async function yaptureV2StartOAuth(): Promise<string> {
+  return invoke<string>("yapture_v2_start_oauth");
+}
+
+export async function yaptureV2Disconnect(): Promise<void> {
+  return invoke("yapture_v2_disconnect");
+}
+
+export async function getYaptureV2Status(): Promise<YaptureV2Status> {
+  return invoke<YaptureV2Status>("get_yapture_v2_status");
+}
+
+export async function setYaptureV2Config(config: {
+  apiUrl?: string;
+  authUrl?: string;
+  enabled?: boolean;
+}): Promise<void> {
+  return invoke("set_yapture_v2_config", config);
+}
+
+export async function testYaptureV2Connection(): Promise<boolean> {
+  return invoke<boolean>("test_yapture_v2_connection");
+}
