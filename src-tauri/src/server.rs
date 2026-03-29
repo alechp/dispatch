@@ -86,6 +86,24 @@ async fn create_notification(
         }
     });
 
+    // Also push to Yapture v2 if configured
+    {
+        let v2_pool = state.db.clone();
+        let v2_notification = notification.clone();
+        let v2_token = state.yapture_v2_tokens.lock().ok().and_then(|t| t.service_token.clone());
+        tokio::spawn(async move {
+            match crate::yapture::load_v2_config(&v2_pool, v2_token).await {
+                Some(config) => {
+                    crate::log::log(&format!("[yapture-v2] push: pushing notification '{}'", v2_notification.title));
+                    crate::yapture::push_notification(&config, &v2_notification, Some(&v2_pool)).await;
+                }
+                None => {
+                    crate::log::log("[yapture-v2] push: skipped — v2 not configured");
+                }
+            }
+        });
+    }
+
     Ok((StatusCode::CREATED, Json(notification)))
 }
 

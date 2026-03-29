@@ -16,6 +16,24 @@ impl std::fmt::Display for YaptureVersion {
     }
 }
 
+/// Decode user info from a JWT access token (v2 auth service).
+/// v2 tokens include custom claims: yap_user_id, email, name.
+pub fn decode_jwt_claims(token: &str) -> Option<UserInfo> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 { return None; }
+    let payload = URL_SAFE_NO_PAD.decode(parts[1]).ok()?;
+    let claims: serde_json::Value = serde_json::from_slice(&payload).ok()?;
+    Some(UserInfo {
+        sub: claims.get("yap_user_id")
+            .or_else(|| claims.get("sub"))
+            .and_then(|v| v.as_str())?.to_string(),
+        name: claims.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        email: claims.get("email").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        picture: claims.get("picture").and_then(|v| v.as_str()).map(|s| s.to_string()),
+    })
+}
+
 // --- Part 2: Config + Push ---
 
 #[derive(Debug, Clone)]
@@ -481,6 +499,88 @@ pub async fn refresh_access_token(
     resp.json::<TokenResponse>()
         .await
         .map_err(|e| format!("Failed to parse refresh response: {}", e))
+}
+
+/// Load v2 Yapture config from DB settings + in-memory token.
+pub async fn load_v2_config(pool: &sqlx::SqlitePool, service_token: Option<String>) -> Option<YaptureConfig> {
+    let enabled = crate::db::get_setting(pool, "yapture_v2_enabled").await.ok()?;
+    if enabled.as_deref() != Some("1") { return None; }
+    let api_url = crate::db::get_setting(pool, "yapture_v2_api_url").await.ok()??;
+    if api_url.is_empty() { return None; }
+    let user_id = crate::db::get_setting(pool, "yapture_v2_user_id").await.ok()??;
+    if user_id.is_empty() { return None; }
+    let service_token = match service_token {
+        Some(t) if !t.is_empty() => t,
+        _ => return None,
+    };
+    Some(YaptureConfig { enabled: true, api_url, user_id, service_token })
+}
+
+/// Generate PKCE + authorization URL for v2 auth service.
+/// v2 uses BetterAuth at {auth_url}/api/auth/oauth/authorize
+pub fn start_oauth_flow_v2(auth_url: &str) -> (String, OAuthState) {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use sha2::{Digest, Sha256};
+
+    let code_verifier: String = (0..64)
+        .map(|_| {
+            let idx = rand::random::<u8>() % 66;
+            let chars = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+            chars[idx as usize] as char
+        })
+        .collect();
+
+    let mut hasher = Sha256::new();
+    hasher.update(code_verifier.as_bytes());
+    let code_challenge = URL_SAFE_NO_PAD.encode(hasher.finalize());
+
+    let state: String = (0..32)
+        .map(|_| {
+            let idx = rand::random::<u8>() % 36;
+            if idx < 10 { (b'0' + idx) as char } else { (b'a' + idx - 10) as char }
+        })
+        .collect();
+
+    let url = format!(
+        "{}/api/auth/oauth/authorize?client_id=dispatch-desktop&redirect_uri={}&response_type=code&scope={}&code_challenge={}&code_challenge_method=S256&state={}",
+        auth_url,
+        urlencoding::encode("dispatch://oauth/callback"),
+        urlencoding::encode("openid profile email api:read api:write"),
+        code_challenge,
+        state
+    );
+
+    (url, OAuthState { code_verifier, state })
+}
+
+/// Exchange authorization code for tokens via v2 auth service.
+pub async fn exchange_code_v2(
+    auth_url: &str,
+    code: &str,
+    oauth_state: &OAuthState,
+) -> Result<TokenResponse, String> {
+    let client = reqwest::Client::new();
+    let token_url = format!("{}/api/auth/oauth/token", auth_url);
+
+    let params = [
+        ("grant_type", "authorization_code"),
+        ("code", code),
+        ("redirect_uri", "dispatch://oauth/callback"),
+        ("client_id", "dispatch-desktop"),
+        ("code_verifier", &oauth_state.code_verifier),
+    ];
+
+    let resp = client.post(&token_url).form(&params).send().await
+        .map_err(|e| format!("v2 token exchange failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("v2 token exchange failed ({}): {}", status, body));
+    }
+
+    resp.json::<TokenResponse>().await
+        .map_err(|e| format!("Failed to parse v2 token response: {}", e))
 }
 
 /// Detect Yapture API version by probing endpoints.

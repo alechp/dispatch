@@ -640,7 +640,10 @@ pub async fn yapture_start_oauth(
 
     // Store pending OAuth state
     let mut pending = state.oauth_pending.lock().map_err(|e| e.to_string())?;
-    *pending = Some(oauth_state);
+    *pending = Some(crate::state::PendingOAuth {
+        version: "v1".to_string(),
+        state: oauth_state,
+    });
 
     Ok(auth_url)
 }
@@ -766,6 +769,106 @@ pub async fn get_yapture_connection_status(
         user_name,
         user_email,
     })
+}
+
+// --- Yapture V2 commands ---
+
+#[tauri::command]
+pub async fn yapture_v2_start_oauth(
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    let auth_url = db::get_setting(&state.db, "yapture_v2_auth_url")
+        .await
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|| "http://localhost:4800".to_string());
+
+    let (url, oauth_state) = yapture::start_oauth_flow_v2(&auth_url);
+
+    let mut pending = state.oauth_pending.lock().map_err(|e| e.to_string())?;
+    *pending = Some(crate::state::PendingOAuth {
+        version: "v2".to_string(),
+        state: oauth_state,
+    });
+
+    Ok(url)
+}
+
+#[tauri::command]
+pub async fn yapture_v2_disconnect(
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let keys = [
+        "yapture_v2_enabled", "yapture_v2_user_id", "yapture_v2_user_name",
+        "yapture_v2_user_email", "yapture_v2_access_token", "yapture_v2_refresh_token",
+    ];
+    for key in &keys {
+        db::set_setting(&state.db, key, "").await.map_err(|e| e.to_string())?;
+    }
+    if let Ok(mut tokens) = state.yapture_v2_tokens.lock() {
+        *tokens = crate::state::YaptureTokens::default();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_yapture_v2_status(
+    state: State<'_, Arc<AppState>>,
+) -> Result<serde_json::Value, String> {
+    let enabled = db::get_setting(&state.db, "yapture_v2_enabled").await
+        .map_err(|e| e.to_string())?.unwrap_or_default() == "1";
+    let user_name = db::get_setting(&state.db, "yapture_v2_user_name").await
+        .map_err(|e| e.to_string())?.unwrap_or_default();
+    let user_email = db::get_setting(&state.db, "yapture_v2_user_email").await
+        .map_err(|e| e.to_string())?.unwrap_or_default();
+    let api_url = db::get_setting(&state.db, "yapture_v2_api_url").await
+        .map_err(|e| e.to_string())?.unwrap_or_default();
+    let auth_url = db::get_setting(&state.db, "yapture_v2_auth_url").await
+        .map_err(|e| e.to_string())?.unwrap_or_default();
+    let has_token = state.yapture_v2_tokens.lock()
+        .map(|t| t.access_token.is_some()).unwrap_or(false);
+
+    Ok(serde_json::json!({
+        "connected": has_token && !user_name.is_empty(),
+        "enabled": enabled,
+        "userName": if user_name.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(user_name) },
+        "userEmail": if user_email.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(user_email) },
+        "apiUrl": api_url,
+        "authUrl": auth_url,
+    }))
+}
+
+#[tauri::command]
+pub async fn set_yapture_v2_config(
+    state: State<'_, Arc<AppState>>,
+    api_url: Option<String>,
+    auth_url: Option<String>,
+    enabled: Option<bool>,
+) -> Result<(), String> {
+    if let Some(url) = api_url {
+        db::set_setting(&state.db, "yapture_v2_api_url", &url).await.map_err(|e| e.to_string())?;
+    }
+    if let Some(url) = auth_url {
+        db::set_setting(&state.db, "yapture_v2_auth_url", &url).await.map_err(|e| e.to_string())?;
+    }
+    if let Some(en) = enabled {
+        db::set_setting(&state.db, "yapture_v2_enabled", if en { "1" } else { "0" }).await.map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn test_yapture_v2_connection(
+    state: State<'_, Arc<AppState>>,
+) -> Result<bool, String> {
+    let auth_url = db::get_setting(&state.db, "yapture_v2_auth_url")
+        .await
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|| "http://localhost:4800".to_string());
+    let client = reqwest::Client::new();
+    match client.get(&format!("{}/health", auth_url)).send().await {
+        Ok(resp) => Ok(resp.status().is_success()),
+        Err(_) => Ok(false),
+    }
 }
 
 /// Diagnostic: returns detailed permission + listener state for the text expander.

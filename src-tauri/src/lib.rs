@@ -91,6 +91,20 @@ pub fn run() {
                     }
                 }
 
+                // Load persisted Yapture v2 tokens from DB
+                {
+                    let v2_access = db::get_setting(&state.db, "yapture_v2_access_token").await.ok().flatten();
+                    let v2_refresh = db::get_setting(&state.db, "yapture_v2_refresh_token").await.ok().flatten();
+                    if v2_access.is_some() || v2_refresh.is_some() {
+                        if let Ok(mut tokens) = state.yapture_v2_tokens.lock() {
+                            tokens.access_token = v2_access.clone();
+                            tokens.refresh_token = v2_refresh;
+                            tokens.service_token = v2_access;
+                        }
+                        dlog!("setup: yapture v2 tokens loaded from DB");
+                    }
+                }
+
                 dlog!("setup: state initialized, trigger cache loaded");
 
                 state
@@ -391,10 +405,10 @@ pub fn run() {
                     };
 
                     // Validate state and get verifier
-                    let oauth_state = {
+                    let (oauth_version, oauth_state) = {
                         let mut pending = deep_link_state.oauth_pending.lock().unwrap();
                         match pending.take() {
-                            Some(os) if os.state == callback_state => os,
+                            Some(po) if po.state.state == callback_state => (po.version, po.state),
                             Some(_) => {
                                 eprintln!("[oauth] state mismatch");
                                 return;
@@ -410,97 +424,147 @@ pub fn run() {
                     let handle_for_async = deep_link_handle.clone();
 
                     tauri::async_runtime::spawn(async move {
-                        let api_url = crate::db::get_setting(
-                            &state_for_async.db,
-                            "yapture_api_url",
-                        )
-                        .await
-                        .ok()
-                        .flatten()
-                        .unwrap_or_else(|| "https://api.yapture.app".to_string());
+                        if oauth_version == "v1" {
+                            // === V1 OAuth flow ===
+                            let api_url = crate::db::get_setting(
+                                &state_for_async.db,
+                                "yapture_api_url",
+                            )
+                            .await
+                            .ok()
+                            .flatten()
+                            .unwrap_or_else(|| "https://api.yapture.app".to_string());
 
-                        // Exchange code for tokens
-                        let tokens =
-                            match yapture::exchange_code(&api_url, &code, &oauth_state).await {
+                            // Exchange code for tokens
+                            let tokens =
+                                match yapture::exchange_code(&api_url, &code, &oauth_state).await {
+                                    Ok(t) => t,
+                                    Err(e) => {
+                                        eprintln!("[oauth] token exchange failed: {}", e);
+                                        return;
+                                    }
+                                };
+
+                            eprintln!("[oauth] tokens received");
+
+                            // Store tokens in AppState (in-memory)
+                            if let Ok(mut t) = state_for_async.yapture_tokens.lock() {
+                                t.access_token = Some(tokens.access_token.clone());
+                                t.refresh_token = tokens.refresh_token.clone();
+                                t.service_token = Some(tokens.access_token.clone());
+                            }
+
+                            // Persist tokens to DB for survival across restarts
+                            let _ = crate::db::set_setting(
+                                &state_for_async.db,
+                                "yapture_access_token",
+                                &tokens.access_token,
+                            ).await;
+                            if let Some(ref rt) = tokens.refresh_token {
+                                let _ = crate::db::set_setting(
+                                    &state_for_async.db,
+                                    "yapture_refresh_token",
+                                    rt,
+                                ).await;
+                            }
+
+                            // Fetch user info
+                            match yapture::fetch_userinfo(&api_url, &tokens.access_token).await {
+                                Ok(info) => {
+                                    eprintln!("[oauth] user: {:?}", info);
+                                    let _ = crate::db::set_setting(
+                                        &state_for_async.db,
+                                        "yapture_user_id",
+                                        &info.sub,
+                                    )
+                                    .await;
+                                    if let Some(name) = &info.name {
+                                        let _ = crate::db::set_setting(
+                                            &state_for_async.db,
+                                            "yapture_user_name",
+                                            name,
+                                        )
+                                        .await;
+                                    }
+                                    if let Some(email) = &info.email {
+                                        let _ = crate::db::set_setting(
+                                            &state_for_async.db,
+                                            "yapture_user_email",
+                                            email,
+                                        )
+                                        .await;
+                                    }
+                                    let _ = crate::db::set_setting(
+                                        &state_for_async.db,
+                                        "yapture_enabled",
+                                        "1",
+                                    )
+                                    .await;
+
+                                    // Emit event to frontend
+                                    if let Some(window) =
+                                        handle_for_async.get_webview_window("main")
+                                    {
+                                        let _ = window.emit(
+                                            "yapture-connected",
+                                            &yapture::YaptureConnectionStatus {
+                                                connected: true,
+                                                user_name: info.name,
+                                                user_email: info.email,
+                                            },
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("[oauth] userinfo fetch failed: {}", e);
+                                }
+                            }
+                        } else {
+                            // === V2 OAuth flow ===
+                            let auth_url = crate::db::get_setting(&state_for_async.db, "yapture_v2_auth_url")
+                                .await.ok().flatten()
+                                .unwrap_or_else(|| "http://localhost:4800".to_string());
+
+                            let tokens = match yapture::exchange_code_v2(&auth_url, &code, &oauth_state).await {
                                 Ok(t) => t,
                                 Err(e) => {
-                                    eprintln!("[oauth] token exchange failed: {}", e);
+                                    eprintln!("[oauth-v2] token exchange failed: {}", e);
                                     return;
                                 }
                             };
 
-                        eprintln!("[oauth] tokens received");
+                            eprintln!("[oauth-v2] tokens received");
 
-                        // Store tokens in AppState (in-memory)
-                        if let Ok(mut t) = state_for_async.yapture_tokens.lock() {
-                            t.access_token = Some(tokens.access_token.clone());
-                            t.refresh_token = tokens.refresh_token.clone();
-                            t.service_token = Some(tokens.access_token.clone());
-                        }
+                            if let Ok(mut t) = state_for_async.yapture_v2_tokens.lock() {
+                                t.access_token = Some(tokens.access_token.clone());
+                                t.refresh_token = tokens.refresh_token.clone();
+                                t.service_token = Some(tokens.access_token.clone());
+                            }
 
-                        // Persist tokens to DB for survival across restarts
-                        let _ = crate::db::set_setting(
-                            &state_for_async.db,
-                            "yapture_access_token",
-                            &tokens.access_token,
-                        ).await;
-                        if let Some(ref rt) = tokens.refresh_token {
-                            let _ = crate::db::set_setting(
-                                &state_for_async.db,
-                                "yapture_refresh_token",
-                                rt,
-                            ).await;
-                        }
+                            let _ = crate::db::set_setting(&state_for_async.db, "yapture_v2_access_token", &tokens.access_token).await;
+                            if let Some(ref rt) = tokens.refresh_token {
+                                let _ = crate::db::set_setting(&state_for_async.db, "yapture_v2_refresh_token", rt).await;
+                            }
 
-                        // Fetch user info
-                        match yapture::fetch_userinfo(&api_url, &tokens.access_token).await {
-                            Ok(info) => {
-                                eprintln!("[oauth] user: {:?}", info);
-                                let _ = crate::db::set_setting(
-                                    &state_for_async.db,
-                                    "yapture_user_id",
-                                    &info.sub,
-                                )
-                                .await;
+                            if let Some(info) = yapture::decode_jwt_claims(&tokens.access_token) {
+                                let _ = crate::db::set_setting(&state_for_async.db, "yapture_v2_user_id", &info.sub).await;
                                 if let Some(name) = &info.name {
-                                    let _ = crate::db::set_setting(
-                                        &state_for_async.db,
-                                        "yapture_user_name",
-                                        name,
-                                    )
-                                    .await;
+                                    let _ = crate::db::set_setting(&state_for_async.db, "yapture_v2_user_name", name).await;
                                 }
                                 if let Some(email) = &info.email {
-                                    let _ = crate::db::set_setting(
-                                        &state_for_async.db,
-                                        "yapture_user_email",
-                                        email,
-                                    )
-                                    .await;
+                                    let _ = crate::db::set_setting(&state_for_async.db, "yapture_v2_user_email", email).await;
                                 }
-                                let _ = crate::db::set_setting(
-                                    &state_for_async.db,
-                                    "yapture_enabled",
-                                    "1",
-                                )
-                                .await;
+                                let _ = crate::db::set_setting(&state_for_async.db, "yapture_v2_enabled", "1").await;
 
-                                // Emit event to frontend
-                                if let Some(window) =
-                                    handle_for_async.get_webview_window("main")
-                                {
-                                    let _ = window.emit(
-                                        "yapture-connected",
-                                        &yapture::YaptureConnectionStatus {
-                                            connected: true,
-                                            user_name: info.name,
-                                            user_email: info.email,
-                                        },
-                                    );
+                                if let Some(window) = handle_for_async.get_webview_window("main") {
+                                    let _ = window.emit("yapture-v2-connected", &yapture::YaptureConnectionStatus {
+                                        connected: true,
+                                        user_name: info.name,
+                                        user_email: info.email,
+                                    });
                                 }
-                            }
-                            Err(e) => {
-                                eprintln!("[oauth] userinfo fetch failed: {}", e);
+                            } else {
+                                eprintln!("[oauth-v2] failed to decode JWT claims from access token");
                             }
                         }
                     });
@@ -659,6 +723,11 @@ pub fn run() {
             commands::yapture_start_oauth,
             commands::yapture_refresh,
             commands::yapture_disconnect,
+            commands::yapture_v2_start_oauth,
+            commands::yapture_v2_disconnect,
+            commands::get_yapture_v2_status,
+            commands::set_yapture_v2_config,
+            commands::test_yapture_v2_connection,
             commands::yapture_detect_version,
             commands::get_yapture_connection_status,
             commands::check_accessibility_trusted,
