@@ -122,10 +122,10 @@ export default function App() {
     getExpandPrefix().then(setExpandPrefix).catch(() => {});
   }, []);
 
-  // Listen for global CMD+SHIFT+K hotkey → open command palette
+  // Listen for global CMD+SHIFT+K hotkey → toggle command palette
   useEffect(() => {
     const unlisten = listen("show-command-palette", () => {
-      setShowCommandPalette(true);
+      setShowCommandPalette((prev) => !prev);
     });
     return () => { unlisten.then((fn) => fn()); };
   }, []);

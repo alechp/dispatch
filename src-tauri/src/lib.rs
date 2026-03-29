@@ -583,7 +583,11 @@ pub fn run() {
                         if let Ok(s) = key_str.parse::<tauri_plugin_global_shortcut::Shortcut>() {
                             if let Err(e) = app.global_shortcut().register(s) {
                                 eprintln!("[hotkeys] failed to register {}: {}", key_str, e);
+                            } else {
+                                eprintln!("[hotkeys] registered global shortcut: {} -> {}", key_str, binding.action);
                             }
+                        } else {
+                            eprintln!("[hotkeys] failed to parse shortcut string: {}", key_str);
                         }
                     }
                 }
