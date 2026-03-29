@@ -1010,7 +1010,7 @@ export function YaptureSettings({ onBack, onHotkeyConfigChanged, onBannerConfigC
               : "text-text-tertiary border-transparent hover:text-text-secondary"
           }`}
         >
-          Keyboard Shortcuts
+          Shortcuts
         </button>
         <button
           onClick={() => setActiveTab("notifications")}
@@ -1030,7 +1030,7 @@ export function YaptureSettings({ onBack, onHotkeyConfigChanged, onBannerConfigC
               : "text-text-tertiary border-transparent hover:text-text-secondary"
           }`}
         >
-          Expansion Sources
+          Sources
         </button>
       </div>
 

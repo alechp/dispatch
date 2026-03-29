@@ -1127,21 +1127,36 @@ pub async fn ensure_default_source(
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let defaults_path = app_data_dir.join("dispatch-defaults.toml");
 
-    // Migrate: if old .yml exists but .toml doesn't, rename it
+    // Migrate: remove old .yml file and its DB source entry
     let old_yml_path = app_data_dir.join("dispatch-defaults.yml");
-    if old_yml_path.exists() && !defaults_path.exists() {
-        let _ = std::fs::rename(&old_yml_path, &defaults_path);
+    if old_yml_path.exists() {
+        let _ = std::fs::remove_file(&old_yml_path);
+    }
+    // Clean up any old .yml DB source entries
+    let old_yml_str = old_yml_path.to_string_lossy().to_string();
+    let sources = db::list_snippet_sources(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    for s in sources.iter().filter(|s| s.path == old_yml_str) {
+        let _ = db::delete_snippet_source(&state.db, &s.id).await;
     }
 
-    // Write template file if it doesn't exist on disk
-    if !defaults_path.exists() {
+    // Write fresh TOML template if missing or if existing content is invalid TOML
+    // (handles the case where a .yml was renamed to .toml without content conversion)
+    let needs_write = if defaults_path.exists() {
+        let content = std::fs::read_to_string(&defaults_path).unwrap_or_default();
+        toml::from_str::<crate::file_parser::ExpansionConfig>(&content).is_err()
+    } else {
+        true
+    };
+    if needs_write {
         std::fs::write(&defaults_path, DEFAULTS_TEMPLATE)
             .map_err(|e| format!("Failed to write defaults: {}", e))?;
     }
 
     let path_str = defaults_path.to_string_lossy().to_string();
 
-    // Check if a source with this path already exists
+    // Re-fetch sources after cleanup
     let sources = db::list_snippet_sources(&state.db)
         .await
         .map_err(|e| e.to_string())?;

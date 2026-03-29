@@ -1072,6 +1072,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-opener",
  "tokio",
+ "toml 0.8.2",
  "tower-http 0.5.2",
  "url",
  "urlencoding",

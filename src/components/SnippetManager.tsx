@@ -1050,9 +1050,24 @@ function LiveExpansionToggle() {
     <div className="px-4 py-3 border-b border-border-subtle bg-surface-raised/50 space-y-2">
       {/* Toggle row */}
       <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-text-secondary">
-          Live Expansion
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-text-secondary">
+            Live Expansion
+          </span>
+          {/* Quick status checkmarks */}
+          <span
+            className={`text-[11px] ${hasAccess ? "text-success" : "text-error"}`}
+            title={hasAccess ? "Accessibility: granted" : "Accessibility: not granted"}
+          >
+            {hasAccess ? "\u2713" : "\u2717"}
+          </span>
+          <span
+            className={`text-[11px] ${listenerActive ? "text-success" : enabled ? "text-warning" : "text-text-tertiary"}`}
+            title={listenerActive ? "Keyboard listener: active" : enabled ? "Keyboard listener: inactive" : "Keyboard listener: disabled"}
+          >
+            {listenerActive ? "\u2713" : enabled ? "\u25CB" : "\u2717"}
+          </span>
+        </div>
         <button
           onClick={handleToggle}
           className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${
