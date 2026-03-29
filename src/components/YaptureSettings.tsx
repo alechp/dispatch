@@ -12,7 +12,7 @@ import {
   type YaptureConfig,
   type YaptureConnectionStatus,
 } from "../lib/yapture";
-import { getYaptureSyncEnabled, setYaptureSyncEnabled, getNotificationBannerConfig, setNotificationBannerConfig } from "../lib/api";
+import { getYaptureSyncEnabled, setYaptureSyncEnabled, getNotificationBannerConfig, setNotificationBannerConfig, detectYaptureVersion } from "../lib/api";
 import {
   importSnippets,
   exportSnippets,
@@ -68,6 +68,8 @@ function YaptureTab() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [syncEnabled, setSyncEnabled] = useState(true);
+  const [yaptureVersion, setYaptureVersion] = useState<string>("");
+  const { showToast } = useToast();
 
   useEffect(() => {
     loadState();
@@ -98,6 +100,13 @@ function YaptureTab() {
         const sync = await getYaptureSyncEnabled();
         setSyncEnabled(sync);
       } catch {}
+      // Load version when connected
+      if (conn.connected) {
+        try {
+          const v = await detectYaptureVersion();
+          setYaptureVersion(v);
+        } catch {}
+      }
     } catch (e) {
       console.error("[yapture-settings] loadState failed:", e);
     }
@@ -196,6 +205,28 @@ function YaptureTab() {
                 Disconnect
               </button>
             </div>
+          </div>
+
+          {/* API Version */}
+          <div className="flex items-center justify-between py-2 px-1">
+              <span className="text-xs text-text-secondary">API Version</span>
+              <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono text-text-primary">{yaptureVersion || "unknown"}</span>
+                  <button
+                      onClick={async () => {
+                          try {
+                              const v = await detectYaptureVersion();
+                              setYaptureVersion(v);
+                              showToast(`Detected Yapture ${v}`);
+                          } catch {
+                              showToast("Detection failed");
+                          }
+                      }}
+                      className="text-[10px] px-2 py-0.5 rounded bg-bg-tertiary text-text-secondary hover:text-text-primary"
+                  >
+                      Detect
+                  </button>
+              </div>
           </div>
 
           {/* Enabled toggle */}

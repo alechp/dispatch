@@ -1,5 +1,21 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum YaptureVersion {
+    V1,
+    V2,
+}
+
+impl std::fmt::Display for YaptureVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            YaptureVersion::V1 => write!(f, "v1"),
+            YaptureVersion::V2 => write!(f, "v2"),
+        }
+    }
+}
+
 // --- Part 2: Config + Push ---
 
 #[derive(Debug, Clone)]
@@ -63,6 +79,13 @@ pub async fn push_notification(
     notification: &crate::models::Notification,
     db: Option<&sqlx::SqlitePool>,
 ) {
+    crate::log::log(&format!(
+        "[yapture] push_notification: id={}, has_session={}, project={}",
+        notification.id,
+        notification.tmux_session.is_some(),
+        notification.project.as_deref().unwrap_or(&notification.source)
+    ));
+
     let client = reqwest::Client::new();
     let project = notification
         .project
@@ -76,17 +99,25 @@ pub async fn push_notification(
         text.push_str(body);
     }
 
-    // Append deep link for tmux terminal focus (clickable from Yapture)
-    if let Some(session) = &notification.tmux_session {
-        let mut deep_link = format!("dispatch://focus-terminal?session={}&nid={}", urlencoding::encode(session), urlencoding::encode(&notification.id));
-        if let Some(w) = &notification.tmux_window {
-            deep_link.push_str(&format!("&window={}", urlencoding::encode(w)));
+    // Append deep link (clickable from Yapture)
+    match &notification.tmux_session {
+        Some(session) => {
+            let mut deep_link = format!("dispatch://focus-terminal?session={}&nid={}", urlencoding::encode(session), urlencoding::encode(&notification.id));
+            if let Some(w) = &notification.tmux_window {
+                deep_link.push_str(&format!("&window={}", urlencoding::encode(w)));
+            }
+            if let Some(p) = &notification.tmux_pane {
+                deep_link.push_str(&format!("&pane={}", urlencoding::encode(p)));
+            }
+            text.push(' ');
+            text.push_str(&deep_link);
         }
-        if let Some(p) = &notification.tmux_pane {
-            deep_link.push_str(&format!("&pane={}", urlencoding::encode(p)));
+        None => {
+            // Fallback: deep link to notifications screen
+            let deep_link = format!("dispatch://notifications?nid={}", urlencoding::encode(&notification.id));
+            text.push(' ');
+            text.push_str(&deep_link);
         }
-        text.push(' ');
-        text.push_str(&deep_link);
     }
 
     if text.len() > 800 {
@@ -135,6 +166,64 @@ pub async fn push_notification(
                 return;
             }
         },
+        Ok(resp) if resp.status() == reqwest::StatusCode::UNAUTHORIZED => {
+            crate::log::log("[yapture] push: 401 — token may be expired, attempting refresh");
+            // Try to refresh and retry once
+            if let Some(pool) = db {
+                if let Ok(Some(rt)) = crate::db::get_setting(pool, "yapture_refresh_token").await {
+                    if let Ok(new_tokens) = refresh_access_token(&config.api_url, &rt).await {
+                        crate::log::log("[yapture] push: token refreshed, retrying");
+                        // Persist the new token
+                        let _ = crate::db::set_setting(pool, "yapture_access_token", &new_tokens.access_token).await;
+                        if let Some(ref new_rt) = new_tokens.refresh_token {
+                            let _ = crate::db::set_setting(pool, "yapture_refresh_token", new_rt).await;
+                        }
+                        // Retry with new token
+                        let new_auth = format!("Bearer {}", new_tokens.access_token);
+                        match client.post(&task_url).header("Authorization", &new_auth)
+                            .header("X-User-ID", &config.user_id).json(&task_body).send().await {
+                            Ok(retry_resp) if retry_resp.status().is_success() => {
+                                match retry_resp.json::<serde_json::Value>().await {
+                                    Ok(v) => {
+                                        let id = v.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
+                                        crate::log::log(&format!("[yapture] task created (after refresh): {}", id));
+                                        if !id.is_empty() {
+                                            if let Err(e) = crate::db::set_yapture_task_id(pool, &notification.id, &id).await {
+                                                crate::log::log(&format!("[yapture] failed to store task_id: {}", e));
+                                            }
+                                        }
+                                        id
+                                    }
+                                    Err(e) => {
+                                        crate::log::log(&format!("[yapture] failed to parse retry response: {}", e));
+                                        return;
+                                    }
+                                }
+                            }
+                            Ok(retry_resp) => {
+                                let status = retry_resp.status();
+                                let body = retry_resp.text().await.unwrap_or_default();
+                                crate::log::log(&format!("[yapture] retry also failed ({}): {}", status, body));
+                                return;
+                            }
+                            Err(e) => {
+                                crate::log::log(&format!("[yapture] retry error: {}", e));
+                                return;
+                            }
+                        }
+                    } else {
+                        crate::log::log("[yapture] push: token refresh failed");
+                        return;
+                    }
+                } else {
+                    crate::log::log("[yapture] push: no refresh token available");
+                    return;
+                }
+            } else {
+                crate::log::log("[yapture] push: 401 but no DB pool for refresh");
+                return;
+            }
+        }
         Ok(resp) => {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
@@ -392,4 +481,25 @@ pub async fn refresh_access_token(
     resp.json::<TokenResponse>()
         .await
         .map_err(|e| format!("Failed to parse refresh response: {}", e))
+}
+
+/// Detect Yapture API version by probing endpoints.
+/// Returns V2 if /api/v2/health responds, otherwise V1.
+pub async fn detect_version(api_url: &str) -> YaptureVersion {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap_or_default();
+
+    let v2_url = format!("{}/api/v2/health", api_url);
+    match client.get(&v2_url).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            crate::log::log("[yapture] detected API version: v2");
+            YaptureVersion::V2
+        }
+        _ => {
+            crate::log::log("[yapture] detected API version: v1");
+            YaptureVersion::V1
+        }
+    }
 }

@@ -694,6 +694,24 @@ pub async fn yapture_refresh(
 }
 
 #[tauri::command]
+pub async fn yapture_detect_version(
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    let api_url = crate::db::get_setting(&state.db, "yapture_api_url")
+        .await
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|| "https://api.yapture.app".to_string());
+
+    let version = crate::yapture::detect_version(&api_url).await;
+    let version_str = version.to_string();
+
+    // Persist detected version
+    let _ = crate::db::set_setting(&state.db, "yapture_version", &version_str).await;
+
+    Ok(version_str)
+}
+
+#[tauri::command]
 pub async fn yapture_disconnect(
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {

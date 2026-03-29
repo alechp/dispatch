@@ -78,3 +78,7 @@ export async function getNotificationBannerConfig(): Promise<NotificationBannerC
 export async function setNotificationBannerConfig(config: NotificationBannerConfig): Promise<void> {
   return invoke("set_notification_banner_config", { configJson: JSON.stringify(config) });
 }
+
+export async function detectYaptureVersion(): Promise<string> {
+  return invoke<string>("yapture_detect_version");
+}

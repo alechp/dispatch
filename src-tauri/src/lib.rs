@@ -283,6 +283,17 @@ pub fn run() {
                         None => return,
                     };
 
+                    // Handle dispatch://notifications?nid=X
+                    if url_str.starts_with("dispatch://notifications") {
+                        dlog!("[deep-link] notifications: {}", url_str);
+                        if let Some(window) = deep_link_handle.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                            let _ = window.emit("navigate-notifications", ());
+                        }
+                        return;
+                    }
+
                     // Handle dispatch://focus-terminal?session=X&window=Y&pane=Z
                     if url_str.starts_with("dispatch://focus-terminal") {
                         dlog!("[deep-link] focus-terminal: {}", url_str);
@@ -644,6 +655,7 @@ pub fn run() {
             commands::yapture_start_oauth,
             commands::yapture_refresh,
             commands::yapture_disconnect,
+            commands::yapture_detect_version,
             commands::get_yapture_connection_status,
             commands::check_accessibility_trusted,
             commands::get_expansion_diagnostics,
