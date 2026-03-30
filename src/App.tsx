@@ -80,7 +80,7 @@ export default function App() {
     (notification: Notification) => {
       play();
       refresh();
-      if (bannerConfig.globalEnabled && bannerConfig.screens[currentScreenKey] !== false) {
+      if (bannerConfig.globalEnabled && bannerConfig.screens[currentScreenKey] === true) {
         setBannerQueue((prev) => [notification, ...prev]);
       }
     },

@@ -752,6 +752,7 @@ pub fn run() {
             commands::sync_all_sources,
             commands::create_boilerplate_config,
             commands::ensure_default_source,
+            commands::get_expansions_directory,
             commands::refresh_triggers,
             commands::get_trigger_cache_count,
             commands::read_source_file,

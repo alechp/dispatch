@@ -40,6 +40,7 @@ import {
   setExpandPrefix as setExpandPrefixApi,
   ensureDefaultSource,
   getTriggerCacheCount,
+  getExpansionsDirectory,
 } from "../lib/snippets";
 import { CodeEditor } from "./CodeEditor";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -676,7 +677,8 @@ function ExpansionSourcesTab() {
 
   const handleAddSource = useCallback(async () => {
     try {
-      const selected = await openDialog({ directory: true, title: "Choose folder or file for expansion config" });
+      const defaultDir = await getExpansionsDirectory().catch(() => undefined);
+      const selected = await openDialog({ directory: true, title: "Choose folder or file for expansion config", defaultPath: defaultDir });
       if (!selected) return;
       const path = typeof selected === "string" ? selected : (selected as any);
       if (!path) return;
@@ -694,7 +696,8 @@ function ExpansionSourcesTab() {
 
   const handleBoilerplate = useCallback(async () => {
     try {
-      const folder = await openDialog({ directory: true, title: "Choose folder for new expansion config" });
+      const defaultDir = await getExpansionsDirectory().catch(() => undefined);
+      const folder = await openDialog({ directory: true, title: "Choose folder for new expansion config", defaultPath: defaultDir });
       if (!folder) return;
       const path = typeof folder === "string" ? folder : (folder as any);
       if (!path) return;

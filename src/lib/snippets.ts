@@ -113,6 +113,10 @@ export async function ensureDefaultSource(): Promise<SnippetSource> {
   return invoke("ensure_default_source");
 }
 
+export async function getExpansionsDirectory(): Promise<string> {
+  return invoke<string>("get_expansions_directory");
+}
+
 export async function refreshTriggers(): Promise<void> {
   return invoke("refresh_triggers");
 }

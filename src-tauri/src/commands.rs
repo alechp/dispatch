@@ -1237,7 +1237,8 @@ pub async fn create_boilerplate_config(
 }
 
 /// Ensure the built-in "Defaults" snippet source exists.
-/// Writes the template to app data dir if the file is missing, creates the DB source if needed, and syncs.
+/// Writes the template to ~/.config/dispatch/expansions/ if the file is missing,
+/// creates the DB source if needed, and syncs.
 #[tauri::command]
 pub async fn ensure_default_source(
     app: tauri::AppHandle,
@@ -1245,20 +1246,34 @@ pub async fn ensure_default_source(
 ) -> Result<models::SnippetSource, String> {
     use tauri::Manager;
 
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let defaults_path = app_data_dir.join("dispatch-defaults.toml");
+    let expansions_dir = dirs::home_dir()
+        .ok_or("Could not determine home directory")?
+        .join(".config/dispatch/expansions");
+    std::fs::create_dir_all(&expansions_dir)
+        .map_err(|e| format!("Failed to create expansions dir: {}", e))?;
+    let defaults_path = expansions_dir.join("dispatch-defaults.toml");
 
-    // Migrate: remove old .yml file and its DB source entry
+    // Migrate: remove old files from app_data_dir
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let old_yml_path = app_data_dir.join("dispatch-defaults.yml");
+    let old_toml_path = app_data_dir.join("dispatch-defaults.toml");
     if old_yml_path.exists() {
         let _ = std::fs::remove_file(&old_yml_path);
     }
-    // Clean up any old .yml DB source entries
+    // Migrate old .toml from app_data_dir to new location
+    if old_toml_path.exists() && !defaults_path.exists() {
+        let _ = std::fs::copy(&old_toml_path, &defaults_path);
+    }
+    if old_toml_path.exists() {
+        let _ = std::fs::remove_file(&old_toml_path);
+    }
+    // Clean up old DB source entries pointing to app_data_dir
     let old_yml_str = old_yml_path.to_string_lossy().to_string();
+    let old_toml_str = old_toml_path.to_string_lossy().to_string();
     let sources = db::list_snippet_sources(&state.db)
         .await
         .map_err(|e| e.to_string())?;
-    for s in sources.iter().filter(|s| s.path == old_yml_str) {
+    for s in sources.iter().filter(|s| s.path == old_yml_str || s.path == old_toml_str) {
         let _ = db::delete_snippet_source(&state.db, &s.id).await;
     }
 
@@ -1297,6 +1312,16 @@ pub async fn ensure_default_source(
     let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
 
     Ok(source)
+}
+
+#[tauri::command]
+pub async fn get_expansions_directory() -> Result<String, String> {
+    let dir = dirs::home_dir()
+        .ok_or("Could not determine home directory")?
+        .join(".config/dispatch/expansions");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create expansions dir: {}", e))?;
+    Ok(dir.to_string_lossy().to_string())
 }
 
 #[tauri::command]
