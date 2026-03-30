@@ -517,7 +517,7 @@ pub async fn load_v2_config(pool: &sqlx::SqlitePool, service_token: Option<Strin
 }
 
 /// Generate PKCE + authorization URL for v2 auth service.
-/// v2 uses BetterAuth at {auth_url}/api/auth/oauth/authorize
+/// v2 uses BetterAuth at {auth_url}/api/auth/oauth2/authorize
 pub fn start_oauth_flow_v2(auth_url: &str) -> (String, OAuthState) {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use sha2::{Digest, Sha256};
@@ -542,7 +542,7 @@ pub fn start_oauth_flow_v2(auth_url: &str) -> (String, OAuthState) {
         .collect();
 
     let url = format!(
-        "{}/api/auth/oauth/authorize?client_id=dispatch-desktop&redirect_uri={}&response_type=code&scope={}&code_challenge={}&code_challenge_method=S256&state={}",
+        "{}/api/auth/oauth2/authorize?client_id=dispatch-desktop&redirect_uri={}&response_type=code&scope={}&code_challenge={}&code_challenge_method=S256&state={}",
         auth_url,
         urlencoding::encode("dispatch://oauth/callback"),
         urlencoding::encode("openid profile email api:read api:write"),
@@ -560,7 +560,7 @@ pub async fn exchange_code_v2(
     oauth_state: &OAuthState,
 ) -> Result<TokenResponse, String> {
     let client = reqwest::Client::new();
-    let token_url = format!("{}/api/auth/oauth/token", auth_url);
+    let token_url = format!("{}/api/auth/oauth2/token", auth_url);
 
     let params = [
         ("grant_type", "authorization_code"),
