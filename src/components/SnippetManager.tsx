@@ -1,18 +1,24 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { useSnippets } from "../hooks/useSnippets";
+import { useToast } from "../hooks/useToast";
 import {
   createSnippet,
   updateSnippet,
   deleteSnippet,
-  importSnippets,
-  exportSnippets,
+  toggleSnippetFavorite,
+  expandSnippet,
 } from "../lib/snippets";
 import {
   getLiveExpansionEnabled,
   setLiveExpansionEnabled,
-  checkAccessibilityPermission,
   requestAccessibilityPermission,
+  getExpansionDiagnostics,
+  openPrivacySettings,
+  testTextInjection,
+  copyToClipboard,
 } from "../lib/liveExpansion";
+import { FormView, parseVariables, hasFormVariables } from "./FormView";
+import type { ExpansionDiagnostics } from "../lib/liveExpansion";
 import type { Snippet, SnippetVariable } from "../lib/types";
 
 interface SnippetManagerProps {
@@ -35,15 +41,6 @@ const VARIABLE_TYPES: SnippetVariable["type"][] = [
 // Helpers
 // ---------------------------------------------------------------------------
 
-function parseVariables(json: string | null): SnippetVariable[] {
-  if (!json) return [];
-  try {
-    return JSON.parse(json) as SnippetVariable[];
-  } catch {
-    return [];
-  }
-}
-
 function parseTags(json: string | null): string[] {
   if (!json) return [];
   try {
@@ -56,16 +53,88 @@ function parseTags(json: string | null): string[] {
 }
 
 // ---------------------------------------------------------------------------
+// SourceGroupHeader
+// ---------------------------------------------------------------------------
+
+function SourceGroupHeader({
+  name,
+  count,
+  isCollapsed,
+  onToggle,
+}: {
+  name: string;
+  count: number;
+  isCollapsed: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      onClick={onToggle}
+      className="flex items-center w-full px-4 py-2 bg-surface-overlay/50 border-b border-border-subtle hover:bg-surface-overlay transition-colors group"
+    >
+      <svg
+        width="12"
+        height="12"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className={`text-text-tertiary transition-transform ${isCollapsed ? "" : "rotate-90"}`}
+      >
+        <polyline points="9 18 15 12 9 6" />
+      </svg>
+      <span className="ml-2 text-[11px] font-medium text-text-secondary">{name}</span>
+      <span className="ml-1.5 text-[10px] text-text-tertiary">({count})</span>
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
 export function SnippetManager({ onBack }: SnippetManagerProps) {
   const [search, setSearch] = useState("");
-  const { snippets, loading, refresh } = useSnippets(search || undefined);
+  const [sourceFilter, setSourceFilter] = useState<{ id: string; name: string } | null>(null);
+  const { snippets, loading, refresh } = useSnippets(search || undefined, undefined, sourceFilter?.id);
 
   const [view, setView] = useState<ViewMode>("list");
   const [editingSnippet, setEditingSnippet] = useState<Snippet | null>(null);
-  const [showImportModal, setShowImportModal] = useState(false);
+
+  // Group snippets by source
+  const groupedSnippets = useMemo(() => {
+    const groups: { name: string; sourceId: string | null; snippets: Snippet[] }[] = [];
+    const groupMap = new Map<string, typeof groups[0]>();
+
+    for (const snippet of snippets) {
+      const key = snippet.source_name || "Defaults";
+      let group = groupMap.get(key);
+      if (!group) {
+        group = { name: key, sourceId: snippet.source_id, snippets: [] };
+        groupMap.set(key, group);
+        groups.push(group);
+      }
+      group.snippets.push(snippet);
+    }
+
+    return groups;
+  }, [snippets]);
+
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+
+  const toggleGroup = useCallback((groupName: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupName)) {
+        next.delete(groupName);
+      } else {
+        next.add(groupName);
+      }
+      return next;
+    });
+  }, []);
 
   const handleOpenCreate = useCallback(() => {
     setEditingSnippet(null);
@@ -83,29 +152,6 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
     refresh();
   }, [refresh]);
 
-  const handleExport = useCallback(async () => {
-    try {
-      const data = await exportSnippets();
-      const json = JSON.stringify(data, null, 2);
-      await navigator.clipboard.writeText(json);
-    } catch (err) {
-      console.error("Export failed:", err);
-    }
-  }, []);
-
-  const handleImportSubmit = useCallback(
-    async (json: string) => {
-      try {
-        await importSnippets(json);
-        setShowImportModal(false);
-        refresh();
-      } catch (err) {
-        console.error("Import failed:", err);
-      }
-    },
-    [refresh]
-  );
-
   if (view === "edit") {
     return (
       <SnippetEditView
@@ -117,7 +163,7 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-surface">
+    <div className="flex flex-col flex-1 min-h-0 bg-surface">
       {/* Top bar */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border-subtle bg-surface shrink-0">
         <button
@@ -136,15 +182,33 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
         />
         <button
           onClick={handleOpenCreate}
-          className="flex items-center justify-center w-7 h-7 rounded-md bg-accent hover:bg-accent-hover text-white text-sm transition-colors"
+          className="flex items-center justify-center w-7 h-7 rounded-md bg-accent hover:bg-accent-hover text-white transition-colors shrink-0"
           title="Add snippet"
         >
-          +
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
         </button>
       </div>
 
       {/* Live Expansion Toggle */}
-      <LiveExpansionToggle />
+      <div className="shrink-0"><LiveExpansionToggle /></div>
+
+      {/* Source filter chip */}
+      {sourceFilter && (
+        <div className="flex items-center justify-between px-4 py-2 bg-accent/5 border-b border-border-subtle shrink-0">
+          <span className="text-[11px] text-accent font-medium">
+            Showing: {sourceFilter.name}
+          </span>
+          <button
+            onClick={() => setSourceFilter(null)}
+            className="text-[11px] text-text-tertiary hover:text-text-primary transition-colors"
+          >
+            Clear
+          </button>
+        </div>
+      )}
 
       {/* Snippet list */}
       <div className="flex-1 overflow-y-auto">
@@ -162,6 +226,44 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
               Create your first snippet
             </button>
           </div>
+        ) : !search ? (
+          <div>
+            {groupedSnippets.length > 1 && (
+              <div className="flex items-center justify-end px-4 py-1.5 border-b border-border-subtle shrink-0">
+                <button
+                  onClick={() => setCollapsedGroups(new Set())}
+                  className="text-[10px] text-text-tertiary hover:text-text-primary transition-colors mr-2"
+                >
+                  Expand All
+                </button>
+                <button
+                  onClick={() => setCollapsedGroups(new Set(groupedSnippets.map(g => g.name)))}
+                  className="text-[10px] text-text-tertiary hover:text-text-primary transition-colors"
+                >
+                  Collapse All
+                </button>
+              </div>
+            )}
+            {groupedSnippets.map((group) => (
+              <div key={group.name}>
+                <SourceGroupHeader
+                  name={group.name}
+                  count={group.snippets.length}
+                  isCollapsed={collapsedGroups.has(group.name)}
+                  onToggle={() => toggleGroup(group.name)}
+                />
+                {!collapsedGroups.has(group.name) &&
+                  group.snippets.map((snippet) => (
+                    <SnippetRow
+                      key={snippet.id}
+                      snippet={snippet}
+                      onClick={() => handleOpenEdit(snippet)}
+                      onRefresh={refresh}
+                    />
+                  ))}
+              </div>
+            ))}
+          </div>
         ) : (
           <div>
             {snippets.map((snippet) => (
@@ -169,35 +271,13 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
                 key={snippet.id}
                 snippet={snippet}
                 onClick={() => handleOpenEdit(snippet)}
+                onRefresh={refresh}
               />
             ))}
           </div>
         )}
       </div>
 
-      {/* Bottom bar */}
-      <div className="flex items-center justify-between px-4 py-3 border-t border-border-subtle bg-surface shrink-0">
-        <button
-          onClick={() => setShowImportModal(true)}
-          className="text-xs text-text-secondary hover:text-text-primary transition-colors px-3 py-1.5 rounded-md border border-border-subtle hover:border-border-default"
-        >
-          Import
-        </button>
-        <button
-          onClick={handleExport}
-          className="text-xs text-text-secondary hover:text-text-primary transition-colors px-3 py-1.5 rounded-md border border-border-subtle hover:border-border-default"
-        >
-          Export
-        </button>
-      </div>
-
-      {/* Import modal */}
-      {showImportModal && (
-        <ImportModal
-          onClose={() => setShowImportModal(false)}
-          onImport={handleImportSubmit}
-        />
-      )}
     </div>
   );
 }
@@ -209,44 +289,246 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
 function SnippetRow({
   snippet,
   onClick,
+  onRefresh,
 }: {
   snippet: Snippet;
   onClick: () => void;
+  onRefresh?: () => void;
 }) {
   const tags = parseTags(snippet.tags);
+  const [copied, setCopied] = useState(false);
+  const [isFav, setIsFav] = useState(snippet.is_favorite === 1);
+  const { showToast } = useToast();
+
+  // Try-expand state
+  const [testResult, setTestResult] = useState<string | null>(null);
+  const [testError, setTestError] = useState<string | null>(null);
+  const [showForm, setShowForm] = useState(false);
+  const [formValues, setFormValues] = useState<Record<string, string>>({});
+
+  const handleCopy = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      try {
+        const expanded = await expandSnippet(snippet.id);
+        await copyToClipboard(expanded);
+        setCopied(true);
+        showToast("Copied to clipboard");
+        setTimeout(() => setCopied(false), 1500);
+      } catch (err) {
+        console.error("Copy failed:", err);
+      }
+    },
+    [snippet.id, showToast]
+  );
+
+  const handleToggleFav = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      try {
+        const newVal = await toggleSnippetFavorite(snippet.id);
+        setIsFav(newVal);
+        onRefresh?.();
+      } catch (err) {
+        console.error("Toggle favorite failed:", err);
+      }
+    },
+    [snippet.id, onRefresh]
+  );
+
+  const handleTry = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      setTestResult(null);
+      setTestError(null);
+
+      const vars = parseVariables(snippet.variables);
+      if (hasFormVariables(vars)) {
+        // Build defaults and show inline form
+        const defaults: Record<string, string> = {};
+        for (const v of vars) {
+          if (v.type === "form") {
+            defaults[v.name] = (v.params.default as string) ?? "";
+          } else if (v.type === "choice") {
+            const values = (v.params.values as string[]) ?? [];
+            defaults[v.name] = values[0] ?? "";
+          }
+        }
+        setFormValues(defaults);
+        setShowForm(true);
+      } else {
+        // Expand immediately
+        try {
+          const expanded = await expandSnippet(snippet.id);
+          setTestResult(expanded);
+        } catch (err) {
+          setTestError(String(err));
+        }
+      }
+    },
+    [snippet.id, snippet.variables]
+  );
+
+  const handleFormExpand = useCallback(async () => {
+    try {
+      const expanded = await expandSnippet(snippet.id, formValues);
+      setTestResult(expanded);
+      setShowForm(false);
+    } catch (err) {
+      setTestError(String(err));
+      setShowForm(false);
+    }
+  }, [snippet.id, formValues]);
+
+  const handleFormCancel = useCallback(() => {
+    setShowForm(false);
+    setFormValues({});
+  }, []);
+
+  const handleCopyResult = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (!testResult) return;
+      await copyToClipboard(testResult);
+      showToast("Copied to clipboard");
+    },
+    [testResult, showToast]
+  );
+
+  const handleDismissResult = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setTestResult(null);
+    setTestError(null);
+  }, []);
+
+  const isFromFile = snippet.source_type === "file";
+  const formVarsForForm = useMemo(() => {
+    const vars = parseVariables(snippet.variables);
+    return vars.filter((v) => v.type === "form" || v.type === "choice");
+  }, [snippet.variables]);
 
   return (
-    <button
-      onClick={onClick}
-      className="w-full text-left px-4 py-3 border-b border-border-subtle hover:bg-surface-raised transition-colors"
-    >
-      <div className="flex items-center gap-2 mb-1">
-        <span className="text-sm font-mono text-accent">{snippet.trigger}</span>
-        {snippet.label && (
-          <span className="text-xs text-text-secondary truncate">
-            {snippet.label}
-          </span>
-        )}
-      </div>
-      <p className="text-xs font-mono text-text-tertiary line-clamp-2 mb-1">
-        {snippet.body}
-      </p>
-      <div className="flex items-center gap-2">
-        {tags.map((tag) => (
-          <span
-            key={tag}
-            className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-surface-overlay text-text-tertiary"
+    <div className="relative group">
+      <button
+        onClick={onClick}
+        className="w-full text-left px-4 py-3 border-b border-border-subtle hover:bg-surface-raised transition-colors"
+      >
+        <div className="flex items-center gap-2 mb-1">
+          <button
+            onClick={handleToggleFav}
+            className={`text-xs shrink-0 transition-colors ${isFav ? "text-warning" : "text-text-tertiary/30 hover:text-text-tertiary"}`}
+            title={isFav ? "Remove from favorites" : "Add to favorites"}
           >
-            {tag}
-          </span>
-        ))}
-        {snippet.use_count > 0 && (
-          <span className="text-[10px] text-text-tertiary ml-auto">
-            used {snippet.use_count}x
-          </span>
-        )}
+            {isFav ? "\u2605" : "\u2606"}
+          </button>
+          <span className="text-sm font-mono text-accent">{snippet.trigger}</span>
+          {snippet.label && (
+            <span className="text-xs text-text-secondary truncate">
+              {snippet.label}
+            </span>
+          )}
+        </div>
+        <p className="text-xs font-mono text-text-tertiary line-clamp-2 mb-1">
+          {snippet.body}
+        </p>
+        <div className="flex items-center gap-2">
+          {isFromFile && (
+            <span className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-accent/10 text-accent">
+              file
+            </span>
+          )}
+          {tags.map((tag) => (
+            <span
+              key={tag}
+              className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-surface-overlay text-text-tertiary"
+            >
+              {tag}
+            </span>
+          ))}
+          {snippet.use_count > 0 && (
+            <span className="text-[10px] text-text-tertiary ml-auto">
+              used {snippet.use_count}x
+            </span>
+          )}
+        </div>
+      </button>
+
+      {/* Try + Copy button overlays */}
+      <div className="absolute top-3 right-3 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+        <button
+          onClick={handleTry}
+          className="p-1.5 rounded-md bg-surface-overlay border border-border-subtle text-text-tertiary hover:text-accent hover:border-accent/30 transition-all"
+          title="Try snippet"
+        >
+          <PlayIcon />
+        </button>
+        <button
+          onClick={handleCopy}
+          className="p-1.5 rounded-md bg-surface-overlay border border-border-subtle text-text-tertiary hover:text-accent hover:border-accent/30 transition-all"
+          title="Copy expanded snippet"
+        >
+          {copied ? <CheckIcon /> : <CopyIcon />}
+        </button>
       </div>
-    </button>
+
+      {/* Inline form for interactive variables */}
+      {showForm && (
+        <div
+          className="border-b border-border-subtle bg-surface-raised/50"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <FormView
+            variables={formVarsForForm}
+            values={formValues}
+            onValuesChange={setFormValues}
+            onExpand={handleFormExpand}
+            onCancel={handleFormCancel}
+          />
+        </div>
+      )}
+
+      {/* Inline test result */}
+      {testResult !== null && (
+        <div
+          className="border-l-2 border-success mx-4 my-2 px-3 py-2 bg-success/5 rounded-r-md"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <pre className="text-xs font-mono text-text-primary whitespace-pre-wrap break-words mb-2">
+            {testResult}
+          </pre>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleCopyResult}
+              className="text-[10px] text-accent hover:text-accent-hover transition-colors"
+            >
+              Copy
+            </button>
+            <button
+              onClick={handleDismissResult}
+              className="text-[10px] text-text-tertiary hover:text-text-primary transition-colors"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Inline test error */}
+      {testError !== null && (
+        <div
+          className="border-l-2 border-error mx-4 my-2 px-3 py-2 bg-error/5 rounded-r-md"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <p className="text-xs text-error break-words mb-2">{testError}</p>
+          <button
+            onClick={handleDismissResult}
+            className="text-[10px] text-text-tertiary hover:text-text-primary transition-colors"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -364,13 +646,22 @@ function SnippetEditView({
         )}
       </div>
 
+      {/* Warning for source-imported snippets */}
+      {isEdit && snippet?.source_type === "file" && (
+        <div className="px-4 py-2 bg-warning/10 border-b border-warning/20">
+          <p className="text-[11px] text-warning">
+            This snippet is imported from a source file. Edits here only apply locally
+            and will be overwritten on next sync. Edit the source file directly for
+            permanent changes.
+          </p>
+        </div>
+      )}
+
       {/* Form */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
         {/* Trigger */}
         <div>
-          <label className="block text-xs font-semibold text-text-secondary mb-1">
-            Trigger
-          </label>
+          <FieldLabel label="Trigger" value={trigger} />
           <input
             type="text"
             value={trigger}
@@ -382,9 +673,7 @@ function SnippetEditView({
 
         {/* Label */}
         <div>
-          <label className="block text-xs font-semibold text-text-secondary mb-1">
-            Label
-          </label>
+          <FieldLabel label="Label" value={label} />
           <input
             type="text"
             value={label}
@@ -396,9 +685,7 @@ function SnippetEditView({
 
         {/* Body */}
         <div>
-          <label className="block text-xs font-semibold text-text-secondary mb-1">
-            Body
-          </label>
+          <FieldLabel label="Body" value={body} />
           <textarea
             value={body}
             onChange={(e) => setBody(e.target.value)}
@@ -469,9 +756,7 @@ function SnippetEditView({
 
         {/* Tags */}
         <div>
-          <label className="block text-xs font-semibold text-text-secondary mb-1">
-            Tags
-          </label>
+          <FieldLabel label="Tags" value={tagsInput} />
           <input
             type="text"
             value={tagsInput}
@@ -827,67 +1112,6 @@ function ListParamEditor({
   );
 }
 
-// ---------------------------------------------------------------------------
-// ImportModal
-// ---------------------------------------------------------------------------
-
-function ImportModal({
-  onClose,
-  onImport,
-}: {
-  onClose: () => void;
-  onImport: (json: string) => void;
-}) {
-  const [json, setJson] = useState("");
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-      onClick={onClose}
-    >
-      <div
-        className="w-[400px] bg-surface-raised border border-border-subtle rounded-lg shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
-          <h2 className="text-sm font-semibold text-text-primary">
-            Import Snippets
-          </h2>
-          <button
-            onClick={onClose}
-            className="p-1 text-text-tertiary hover:text-text-secondary rounded transition-colors"
-          >
-            <CloseIcon />
-          </button>
-        </div>
-        <div className="p-4">
-          <textarea
-            value={json}
-            onChange={(e) => setJson(e.target.value)}
-            rows={10}
-            placeholder="Paste JSON here..."
-            className="w-full bg-surface-overlay border border-border-subtle rounded-md px-3 py-2 text-xs text-text-primary font-mono placeholder:text-text-tertiary focus:outline-none focus:border-accent/50 transition-colors resize-y"
-          />
-        </div>
-        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-border-subtle">
-          <button
-            onClick={onClose}
-            className="text-xs text-text-secondary hover:text-text-primary transition-colors px-3 py-1.5 rounded-md border border-border-subtle"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={() => onImport(json)}
-            disabled={!json.trim()}
-            className="text-xs text-white bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors px-3 py-1.5 rounded-md"
-          >
-            Import
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // LiveExpansionToggle
@@ -895,63 +1119,240 @@ function ImportModal({
 
 function LiveExpansionToggle() {
   const [enabled, setEnabled] = useState(false);
-  const [hasPermission, setHasPermission] = useState(true);
+  const [diag, setDiag] = useState<ExpansionDiagnostics | null>(null);
   const [loading, setLoading] = useState(true);
+  const [testResult, setTestResult] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const [isEnabled, hasPerm] = await Promise.all([
-          getLiveExpansionEnabled(),
-          checkAccessibilityPermission(),
-        ]);
-        setEnabled(isEnabled);
-        setHasPermission(hasPerm);
-      } catch {
-        // ignore
-      } finally {
-        setLoading(false);
-      }
-    })();
+  const refreshDiagnostics = useCallback(async () => {
+    try {
+      const [isEnabled, diagnostics] = await Promise.all([
+        getLiveExpansionEnabled(),
+        getExpansionDiagnostics(),
+      ]);
+      setEnabled(isEnabled);
+      setDiag(diagnostics);
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
+  useEffect(() => {
+    refreshDiagnostics();
+  }, [refreshDiagnostics]);
+
   const handleToggle = useCallback(async () => {
-    if (!hasPermission) {
-      const granted = await requestAccessibilityPermission();
-      setHasPermission(granted);
-      if (!granted) return;
+    if (diag && !diag.accessibility) {
+      await requestAccessibilityPermission();
+      // Refresh after user potentially grants permission
+      setTimeout(refreshDiagnostics, 1000);
+      return;
     }
     const newValue = !enabled;
-    setEnabled(newValue);
-    await setLiveExpansionEnabled(newValue);
-  }, [enabled, hasPermission]);
+    try {
+      await setLiveExpansionEnabled(newValue);
+      setEnabled(newValue);
+      refreshDiagnostics();
+    } catch (err) {
+      console.error("[LiveExpansion] toggle failed:", err);
+    }
+  }, [enabled, diag, refreshDiagnostics]);
+
+  const handleTest = useCallback(async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await testTextInjection();
+      setTestResult(result);
+    } catch (err) {
+      setTestResult(`Error: ${err}`);
+    } finally {
+      setTesting(false);
+    }
+  }, []);
 
   if (loading) return null;
 
+  const hasAccess = diag?.accessibility ?? false;
+  const listenerActive = diag?.listener_active ?? false;
+  const eventCount = diag?.event_count ?? 0;
+  const triggerCount = diag?.trigger_count ?? 0;
+  const allGood = hasAccess && listenerActive;
+
   return (
-    <div className="flex items-center justify-between px-4 py-2 border-b border-border-subtle bg-surface-raised/50">
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-medium text-text-secondary">
-          Live Expansion
-        </span>
-        {!hasPermission && (
-          <span className="text-[10px] text-warning">
-            Needs Input Monitoring permission
+    <div className="px-4 py-3 border-b border-border-subtle bg-surface-raised/50 space-y-2">
+      {/* Toggle row */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-text-secondary">
+            Live Expansion
           </span>
+          {/* Quick status checkmarks */}
+          <span
+            className={`text-[11px] ${hasAccess ? "text-success" : "text-error"}`}
+            title={hasAccess ? "Accessibility: granted" : "Accessibility: not granted"}
+          >
+            {hasAccess ? "\u2713" : "\u2717"}
+          </span>
+          <span
+            className={`text-[11px] ${listenerActive ? "text-success" : enabled ? "text-warning" : "text-text-tertiary"}`}
+            title={listenerActive ? "Keyboard listener: active" : enabled ? "Keyboard listener: inactive" : "Keyboard listener: disabled"}
+          >
+            {listenerActive ? "\u2713" : enabled ? "\u25CB" : "\u2717"}
+          </span>
+        </div>
+        <button
+          onClick={handleToggle}
+          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${
+            enabled
+              ? "bg-accent"
+              : "bg-surface-overlay border border-border-subtle"
+          }`}
+        >
+          <span
+            className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${
+              enabled ? "translate-x-4" : "translate-x-0.5"
+            }`}
+          />
+        </button>
+      </div>
+
+      {/* Permission checklist */}
+      <div className="space-y-1">
+        <PermissionRow
+          label="Accessibility"
+          description="Keyboard listener + text injection"
+          granted={hasAccess}
+          onOpenSettings={() => openPrivacySettings("Accessibility")}
+        />
+        {hasAccess && enabled && (
+          <div className="flex items-center gap-2">
+            <span
+              className={`text-[11px] ${listenerActive ? "text-success" : "text-warning"}`}
+            >
+              {listenerActive ? "\u2713" : "\u25CB"}
+            </span>
+            <span className="text-[11px] text-text-secondary">
+              Keyboard listener
+              <span className="text-text-tertiary ml-1">
+                — {listenerActive ? "active" : "waiting for permission (retrying...)"}
+              </span>
+            </span>
+          </div>
         )}
       </div>
-      <button
-        onClick={handleToggle}
-        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-          enabled ? "bg-accent" : "bg-surface-overlay border border-border-subtle"
-        }`}
-      >
-        <span
-          className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${
-            enabled ? "translate-x-4" : "translate-x-0.5"
+
+      {/* Status line */}
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] text-text-tertiary">
+          {!enabled
+            ? "Disabled"
+            : allGood
+              ? `Listening — ${triggerCount} trigger${triggerCount !== 1 ? "s" : ""} loaded — ${eventCount} events`
+              : !hasAccess
+                ? "Grant Accessibility permission to enable keyboard listener"
+                : "Waiting for keyboard listener to start..."}
+        </span>
+        {enabled && (
+          <button
+            onClick={handleTest}
+            disabled={testing}
+            className="text-[10px] text-accent hover:text-accent-hover transition-colors disabled:opacity-50"
+          >
+            {testing ? "Testing..." : "Test Injection"}
+          </button>
+        )}
+        <button
+          onClick={refreshDiagnostics}
+          className="text-[10px] text-text-tertiary hover:text-text-secondary transition-colors ml-auto"
+        >
+          Refresh
+        </button>
+      </div>
+
+      {/* Test result */}
+      {testResult && (
+        <div
+          className={`text-[10px] px-2 py-1.5 rounded ${
+            testResult.startsWith("OK")
+              ? "bg-success/10 text-success"
+              : "bg-error/10 text-error"
           }`}
-        />
-      </button>
+        >
+          {testResult}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PermissionRow({
+  label,
+  description,
+  granted,
+  onOpenSettings,
+}: {
+  label: string;
+  description: string;
+  granted: boolean;
+  onOpenSettings: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span
+        className={`text-[11px] ${granted ? "text-success" : "text-error"}`}
+      >
+        {granted ? "\u2713" : "\u2717"}
+      </span>
+      <span className="text-[11px] text-text-secondary flex-1">
+        {label}
+        <span className="text-text-tertiary ml-1">— {description}</span>
+      </span>
+      {!granted && (
+        <button
+          onClick={onOpenSettings}
+          className="text-[10px] text-accent hover:text-accent-hover transition-colors shrink-0"
+        >
+          Open Settings
+        </button>
+      )}
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// FieldLabel — label with inline copy button
+// ---------------------------------------------------------------------------
+
+function FieldLabel({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+  const { showToast } = useToast();
+
+  const handleCopy = useCallback(async () => {
+    if (!value) return;
+    await copyToClipboard(value);
+    setCopied(true);
+    showToast("Copied to clipboard");
+    setTimeout(() => setCopied(false), 1500);
+  }, [value, showToast]);
+
+  return (
+    <div className="flex items-center justify-between mb-1">
+      <label className="text-xs font-semibold text-text-secondary">
+        {label}
+      </label>
+      {value && (
+        <button
+          onClick={handleCopy}
+          className="p-0.5 text-text-tertiary hover:text-accent transition-colors"
+          title={`Copy ${label.toLowerCase()}`}
+        >
+          {copied ? <CheckIcon /> : <CopyIcon />}
+        </button>
+      )}
     </div>
   );
 }
@@ -959,6 +1360,56 @@ function LiveExpansionToggle() {
 // ---------------------------------------------------------------------------
 // Icons
 // ---------------------------------------------------------------------------
+
+function PlayIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      stroke="none"
+    >
+      <polygon points="6 3 20 12 6 21 6 3" />
+    </svg>
+  );
+}
+
+function CopyIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="text-success"
+    >
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  );
+}
 
 function ChevronLeftIcon() {
   return (
@@ -977,20 +1428,3 @@ function ChevronLeftIcon() {
   );
 }
 
-function CloseIcon() {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <line x1="18" y1="6" x2="6" y2="18" />
-      <line x1="6" y1="6" x2="18" y2="18" />
-    </svg>
-  );
-}

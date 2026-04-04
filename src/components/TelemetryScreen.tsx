@@ -89,7 +89,7 @@ export function TelemetryScreen({ onBack }: TelemetryScreenProps) {
 
   if (loading) {
     return (
-      <div className="flex flex-col h-screen bg-surface">
+      <div className="flex flex-col flex-1 min-h-0 bg-surface">
         <TopBar onBack={onBack} timeRange={timeRange} onTimeRangeChange={setTimeRange} />
         <div className="flex-1 flex items-center justify-center">
           <p className="text-sm text-text-tertiary">Loading analytics...</p>
@@ -100,7 +100,7 @@ export function TelemetryScreen({ onBack }: TelemetryScreenProps) {
 
   if (!summary) {
     return (
-      <div className="flex flex-col h-screen bg-surface">
+      <div className="flex flex-col flex-1 min-h-0 bg-surface">
         <TopBar onBack={onBack} timeRange={timeRange} onTimeRangeChange={setTimeRange} />
         <div className="flex-1 flex items-center justify-center">
           <p className="text-sm text-text-tertiary">No telemetry data available.</p>
@@ -114,7 +114,7 @@ export function TelemetryScreen({ onBack }: TelemetryScreenProps) {
   const totalReads = summary.reads_by_method.reduce((sum, [, c]) => sum + c, 0) || 1;
 
   return (
-    <div className="flex flex-col h-screen bg-surface">
+    <div className="flex flex-col flex-1 min-h-0 bg-surface">
       <TopBar onBack={onBack} timeRange={timeRange} onTimeRangeChange={setTimeRange} />
 
       <div className="flex-1 overflow-y-auto">
@@ -127,36 +127,7 @@ export function TelemetryScreen({ onBack }: TelemetryScreenProps) {
 
         {/* Activity Chart */}
         {summary.events_by_day.length > 0 && (
-          <div className="px-4 pb-4">
-            <h2 className="text-xs font-semibold text-text-secondary mb-2">Activity</h2>
-            <div className="rounded-lg bg-surface-raised border border-border-subtle p-3">
-              <div className="flex items-end gap-[3px]" style={{ height: 120 }}>
-                {summary.events_by_day.map(([day, count]) => {
-                  const heightPct = (count / maxDayCount) * 100;
-                  return (
-                    <div key={day} className="flex-1 flex flex-col items-center justify-end h-full">
-                      <div
-                        className="w-full bg-accent rounded-t-sm min-h-[2px] transition-all"
-                        style={{ height: `${heightPct}%` }}
-                        title={`${day}: ${count}`}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-              <div className="flex gap-[3px] mt-1">
-                {summary.events_by_day.map(([day], i) => (
-                  <div key={day} className="flex-1 text-center">
-                    {i === 0 || i === summary.events_by_day.length - 1 || summary.events_by_day.length <= 7 ? (
-                      <span className="text-[9px] text-text-tertiary">{formatDayLabel(day)}</span>
-                    ) : i % Math.ceil(summary.events_by_day.length / 7) === 0 ? (
-                      <span className="text-[9px] text-text-tertiary">{formatDayLabel(day)}</span>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
+          <ActivityChart eventsPerDay={summary.events_by_day} maxCount={maxDayCount} />
         )}
 
         {/* Top Sources */}
@@ -339,6 +310,80 @@ function StatCard({ value, label }: { value: number; label: string }) {
     <div className="rounded-lg bg-surface-raised border border-border-subtle p-3 text-center">
       <p className="text-xl font-bold text-text-primary">{value.toLocaleString()}</p>
       <p className="text-[11px] text-text-tertiary mt-0.5">{label}</p>
+    </div>
+  );
+}
+
+function ActivityChart({
+  eventsPerDay,
+  maxCount,
+}: {
+  eventsPerDay: [string, number][];
+  maxCount: number;
+}) {
+  const [hovered, setHovered] = useState<{ day: string; count: number; x: number } | null>(null);
+  const chartRef = useRef<HTMLDivElement>(null);
+
+  function handleMouseEnter(day: string, count: number, e: React.MouseEvent<HTMLDivElement>) {
+    const chartRect = chartRef.current?.getBoundingClientRect();
+    const barRect = e.currentTarget.getBoundingClientRect();
+    if (chartRect) {
+      setHovered({ day, count, x: barRect.left - chartRect.left + barRect.width / 2 });
+    }
+  }
+
+  function formatTooltipDay(dateStr: string): string {
+    const date = new Date(dateStr);
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    return `${months[date.getMonth()]} ${date.getDate()}`;
+  }
+
+  return (
+    <div className="px-4 pb-4">
+      <h2 className="text-xs font-semibold text-text-secondary mb-2">Activity</h2>
+      <div ref={chartRef} className="rounded-lg bg-surface-raised border border-border-subtle p-3 relative">
+        {hovered && (
+          <div
+            className="absolute -top-1 z-10 px-2 py-1 rounded bg-surface-overlay border border-border-subtle shadow-lg -translate-x-1/2 -translate-y-full pointer-events-none"
+            style={{ left: hovered.x }}
+          >
+            <p className="text-[10px] text-text-primary font-medium whitespace-nowrap">
+              {formatTooltipDay(hovered.day)}
+            </p>
+            <p className="text-[10px] text-text-tertiary whitespace-nowrap">
+              {hovered.count} {hovered.count === 1 ? "event" : "events"}
+            </p>
+          </div>
+        )}
+        <div className="flex items-end gap-[3px]" style={{ height: 120 }}>
+          {eventsPerDay.map(([day, count]) => {
+            const heightPct = (count / maxCount) * 100;
+            return (
+              <div key={day} className="flex-1 flex flex-col items-center justify-end h-full">
+                <div
+                  className={`w-full rounded-t-sm min-h-[2px] transition-all ${
+                    hovered?.day === day ? "bg-accent-hover" : "bg-accent"
+                  }`}
+                  style={{ height: `${heightPct}%` }}
+                  onMouseEnter={(e) => handleMouseEnter(day, count, e)}
+                  onMouseLeave={() => setHovered(null)}
+                />
+              </div>
+            );
+          })}
+        </div>
+        <div className="flex gap-[3px] mt-1">
+          {eventsPerDay.map(([day], i) => (
+            <div key={day} className="flex-1 text-center">
+              {i === 0 || i === eventsPerDay.length - 1 || eventsPerDay.length <= 7 ? (
+                <span className="text-[9px] text-text-tertiary">{formatDayLabel(day)}</span>
+              ) : i % Math.ceil(eventsPerDay.length / 7) === 0 ? (
+                <span className="text-[9px] text-text-tertiary">{formatDayLabel(day)}</span>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

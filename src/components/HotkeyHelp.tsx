@@ -1,52 +1,94 @@
 import { useEffect } from "react";
+import type { HotkeyConfig } from "../lib/types";
 
 interface HotkeyHelpProps {
   onClose: () => void;
-}
-
-interface Keybinding {
-  keys: string[];
-  description: string;
+  config: HotkeyConfig | null;
 }
 
 interface KeybindingGroup {
   title: string;
-  bindings: Keybinding[];
+  bindings: { keys: string[]; description: string }[];
 }
 
-const groups: KeybindingGroup[] = [
-  {
-    title: "Navigation",
-    bindings: [
-      { keys: ["j", "\u2193"], description: "Next notification" },
-      { keys: ["k", "\u2191"], description: "Previous notification" },
-      { keys: ["f"], description: "Focus search" },
-      { keys: ["Esc"], description: "Clear selection" },
-    ],
-  },
-  {
-    title: "Actions",
-    bindings: [
-      { keys: ["Enter", "r"], description: "Mark read" },
-      { keys: ["d", "\u232b"], description: "Delete" },
-      { keys: ["t"], description: "Focus terminal" },
-      { keys: ["R"], description: "Mark all read" },
-      { keys: ["D"], description: "Clear all" },
-    ],
-  },
-  {
-    title: "Filters",
-    bindings: [
-      { keys: ["1"], description: "All" },
-      { keys: ["2"], description: "Unread" },
-      { keys: ["3"], description: "Read" },
-    ],
-  },
-  {
-    title: "Help",
-    bindings: [{ keys: ["?"], description: "Toggle help" }],
-  },
-];
+function deriveGroups(config: HotkeyConfig | null): KeybindingGroup[] {
+  if (!config) {
+    // Fallback hardcoded defaults if config hasn't loaded
+    return [
+      {
+        title: "Navigation",
+        bindings: [
+          { keys: ["j", "\u2193"], description: "Next notification" },
+          { keys: ["k", "\u2191"], description: "Previous notification" },
+          { keys: ["f"], description: "Focus search" },
+          { keys: ["Esc"], description: "Clear selection" },
+        ],
+      },
+      {
+        title: "Actions",
+        bindings: [
+          { keys: ["Enter", "r"], description: "Mark read" },
+          { keys: ["d", "\u232b"], description: "Delete" },
+          { keys: ["t"], description: "Focus terminal" },
+          { keys: ["R"], description: "Mark all read" },
+          { keys: ["D"], description: "Clear all" },
+        ],
+      },
+      {
+        title: "Filters",
+        bindings: [
+          { keys: ["1"], description: "All" },
+          { keys: ["2"], description: "Unread" },
+          { keys: ["3"], description: "Read" },
+        ],
+      },
+      {
+        title: "Visual",
+        bindings: [
+          { keys: ["v"], description: "Toggle visual mode" },
+          { keys: ["Space"], description: "Toggle item selection" },
+        ],
+      },
+      {
+        title: "Help",
+        bindings: [{ keys: ["?"], description: "Toggle help" }],
+      },
+    ];
+  }
+
+  const groupMap = new Map<string, { keys: string[]; description: string }[]>();
+  for (const binding of config.bindings) {
+    if (!binding.enabled) continue;
+    const displayKeys = binding.keys.map(formatKeyForDisplay);
+    const list = groupMap.get(binding.category) || [];
+    list.push({ keys: displayKeys, description: binding.description });
+    groupMap.set(binding.category, list);
+  }
+
+  return Array.from(groupMap.entries()).map(([title, bindings]) => ({
+    title,
+    bindings,
+  }));
+}
+
+function formatKeyForDisplay(key: string): string {
+  if (key.includes("CommandOrControl")) {
+    return key
+      .replace("CommandOrControl", "\u2318")
+      .replace("+Shift+", "+\u21e7+")
+      .replace(/\+/g, "");
+  }
+  switch (key) {
+    case "ArrowDown": return "\u2193";
+    case "ArrowUp": return "\u2191";
+    case "ArrowLeft": return "\u2190";
+    case "ArrowRight": return "\u2192";
+    case "Backspace": return "\u232b";
+    case "Enter": return "\u23ce";
+    case "Escape": return "Esc";
+    default: return key;
+  }
+}
 
 function KeyBadge({ label }: { label: string }) {
   return (
@@ -56,7 +98,9 @@ function KeyBadge({ label }: { label: string }) {
   );
 }
 
-export function HotkeyHelp({ onClose }: HotkeyHelpProps) {
+export function HotkeyHelp({ onClose, config }: HotkeyHelpProps) {
+  const groups = deriveGroups(config);
+
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {

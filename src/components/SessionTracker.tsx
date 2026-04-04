@@ -53,7 +53,10 @@ function formatDirectory(dir: string): string {
   return display;
 }
 
-export function SessionTracker({ onBack, onFocusTerminal }: SessionTrackerProps) {
+/** Inline session content (no wrapper/back button) for embedding in the feed area. */
+export function SessionContent({ onFocusTerminal }: {
+  onFocusTerminal: (id: string, session: string, window: string | null, pane: string | null) => void;
+}) {
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>(
     () => (localStorage.getItem("dispatch:session-view-mode") as ViewMode) || "cards"
@@ -65,27 +68,9 @@ export function SessionTracker({ onBack, onFocusTerminal }: SessionTrackerProps)
   }, [viewMode]);
 
   return (
-    <div className="flex flex-col h-screen bg-surface">
-      {/* Top bar */}
+    <>
+      {/* Search + view toggle */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-border-subtle bg-surface shrink-0">
-        <button
-          onClick={onBack}
-          className="flex items-center gap-1 text-xs text-text-secondary hover:text-text-primary transition-colors shrink-0"
-        >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <polyline points="15 18 9 12 15 6" />
-          </svg>
-          Back
-        </button>
         <div className="flex-1">
           <input
             type="text"
@@ -95,7 +80,6 @@ export function SessionTracker({ onBack, onFocusTerminal }: SessionTrackerProps)
             className="w-full text-xs bg-surface-overlay border border-border-subtle rounded-md px-2.5 py-1.5 text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent/50 transition-colors"
           />
         </div>
-        {/* View toggle */}
         <div className="flex rounded-md overflow-hidden border border-border-subtle shrink-0">
           <button
             onClick={() => setViewMode("list")}
@@ -189,6 +173,25 @@ export function SessionTracker({ onBack, onFocusTerminal }: SessionTrackerProps)
           </div>
         </div>
       )}
+    </>
+  );
+}
+
+export function SessionTracker({ onBack, onFocusTerminal }: SessionTrackerProps) {
+  return (
+    <div className="flex flex-col flex-1 min-h-0 bg-surface">
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-border-subtle bg-surface shrink-0">
+        <button
+          onClick={onBack}
+          className="flex items-center gap-1 text-xs text-text-secondary hover:text-text-primary transition-colors shrink-0"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="15 18 9 12 15 6" />
+          </svg>
+          Back
+        </button>
+      </div>
+      <SessionContent onFocusTerminal={onFocusTerminal} />
     </div>
   );
 }
@@ -255,6 +258,25 @@ function SessionRow({
           {session.error_count} errors
         </span>
       </div>
+
+      {/* Row 4: directory + tmux */}
+      {(session.directory || session.last_tmux_session) && (
+        <div className="flex items-center gap-2 mt-1.5">
+          {session.directory && (
+            <div className="flex items-center gap-1 text-[11px] text-text-secondary min-w-0">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              </svg>
+              <span className="truncate">{formatDirectory(session.directory)}</span>
+            </div>
+          )}
+          {session.last_tmux_session && (
+            <span className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-surface-overlay text-text-tertiary shrink-0">
+              tmux: {session.last_tmux_session}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -298,11 +320,16 @@ function ProjectCard({
         </span>
       </div>
 
-      {/* Source badge */}
-      <div className="mt-1">
+      {/* Source + tmux badge */}
+      <div className="flex items-center gap-1 mt-1">
         <span className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-surface-overlay text-text-tertiary">
           {session.source}
         </span>
+        {session.last_tmux_session && (
+          <span className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-accent/10 text-accent">
+            tmux: {session.last_tmux_session}
+          </span>
+        )}
       </div>
 
       {/* Metadata section */}

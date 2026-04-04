@@ -1,7 +1,9 @@
+use std::path::PathBuf;
+
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
-use crate::models::{CreateNotificationRequest, Notification, QueryParams};
+use crate::models::{CreateNotificationRequest, HotkeyConfig, Notification, QueryParams};
 
 pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::raw_sql(include_str!("../migrations/001_initial.sql"))
@@ -37,6 +39,49 @@ pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::raw_sql(include_str!("../migrations/008_yapture_oauth.sql"))
         .execute(pool)
         .await?;
+    sqlx::raw_sql(include_str!("../migrations/009_hotkey_config.sql"))
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(include_str!("../migrations/010_update_hotkey_defaults.sql"))
+        .execute(pool)
+        .await?;
+
+    // Migration 011: yapture_task_id + sync setting
+    for stmt in ["ALTER TABLE notifications ADD COLUMN yapture_task_id TEXT"] {
+        if let Err(e) = sqlx::query(stmt).execute(pool).await {
+            if !e.to_string().contains("duplicate column") {
+                return Err(e);
+            }
+        }
+    }
+    sqlx::raw_sql("INSERT OR IGNORE INTO settings (key, value) VALUES ('yapture_bidirectional_sync', 'true')")
+        .execute(pool)
+        .await?;
+
+    // Migration 012: snippet_sources table + source_id/source_type/is_favorite on snippets
+    sqlx::raw_sql(include_str!("../migrations/012_snippet_sources_and_favorites.sql"))
+        .execute(pool)
+        .await?;
+    for stmt in [
+        "ALTER TABLE snippets ADD COLUMN source_id TEXT REFERENCES snippet_sources(id) ON DELETE CASCADE",
+        "ALTER TABLE snippets ADD COLUMN source_type TEXT NOT NULL DEFAULT 'builtin'",
+        "ALTER TABLE snippets ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0",
+    ] {
+        if let Err(e) = sqlx::query(stmt).execute(pool).await {
+            if !e.to_string().contains("duplicate column") {
+                return Err(e);
+            }
+        }
+    }
+    // Indexes must be created after ALTER TABLE adds the columns
+    for stmt in [
+        "CREATE INDEX IF NOT EXISTS idx_snippets_source ON snippets(source_id)",
+        "CREATE INDEX IF NOT EXISTS idx_snippets_favorite ON snippets(is_favorite)",
+        "CREATE INDEX IF NOT EXISTS idx_snippets_source_trigger ON snippets(source_id, trigger)",
+    ] {
+        let _ = sqlx::query(stmt).execute(pool).await;
+    }
+
     Ok(())
 }
 
@@ -455,8 +500,8 @@ pub async fn get_notification_by_id(
     pool: &SqlitePool,
     id: &str,
 ) -> Result<Option<crate::models::Notification>, sqlx::Error> {
-    let row: Option<(String, String, String, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, i32, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, source, event_type, title, body, metadata, project, tmux_session, tmux_window, tmux_pane, is_read, created_at, read_at FROM notifications WHERE id = ?"
+    let row: Option<(String, String, String, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, i32, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT id, source, event_type, title, body, metadata, project, tmux_session, tmux_window, tmux_pane, is_read, created_at, read_at, yapture_task_id FROM notifications WHERE id = ?"
     )
     .bind(id)
     .fetch_optional(pool)
@@ -476,7 +521,26 @@ pub async fn get_notification_by_id(
         is_read: r.10,
         created_at: r.11,
         read_at: r.12,
+        yapture_task_id: r.13,
     }))
+}
+
+pub async fn set_yapture_task_id(pool: &SqlitePool, notification_id: &str, yapture_task_id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE notifications SET yapture_task_id = ? WHERE id = ?")
+        .bind(yapture_task_id)
+        .bind(notification_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn get_all_notification_yapture_ids(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT yapture_task_id FROM notifications WHERE yapture_task_id IS NOT NULL AND yapture_task_id != ''"
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| r.0).collect())
 }
 
 // --- Snippet functions ---
@@ -540,27 +604,52 @@ pub async fn delete_snippet(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::E
     Ok(result.rows_affected() > 0)
 }
 
-pub async fn get_snippet(pool: &SqlitePool, id: &str) -> Result<Option<crate::models::Snippet>, sqlx::Error> {
-    let row: Option<(String, String, Option<String>, String, Option<String>, Option<String>, i32, i64, Option<String>, String, String)> = sqlx::query_as(
-        "SELECT id, trigger, label, body, tags, variables, is_enabled, use_count, last_used_at, created_at, updated_at FROM snippets WHERE id = ?"
-    ).bind(id).fetch_optional(pool).await?;
+type SnippetRow = (String, String, Option<String>, String, Option<String>, Option<String>, i32, i64, Option<String>, String, String, Option<String>, Option<String>, Option<i32>);
 
-    Ok(row.map(|r| crate::models::Snippet {
+fn row_to_snippet(r: SnippetRow) -> crate::models::Snippet {
+    crate::models::Snippet {
         id: r.0, trigger: r.1, label: r.2, body: r.3, tags: r.4, variables: r.5,
         is_enabled: r.6, use_count: r.7, last_used_at: r.8, created_at: r.9, updated_at: r.10,
-    }))
+        source_id: r.11, source_type: r.12, is_favorite: r.13, source_name: None,
+    }
+}
+
+type SnippetRowWithSource = (String, String, Option<String>, String, Option<String>, Option<String>, i32, i64, Option<String>, String, String, Option<String>, Option<String>, Option<i32>, Option<String>);
+
+fn row_to_snippet_with_source(r: SnippetRowWithSource) -> crate::models::Snippet {
+    crate::models::Snippet {
+        id: r.0, trigger: r.1, label: r.2, body: r.3, tags: r.4, variables: r.5,
+        is_enabled: r.6, use_count: r.7, last_used_at: r.8, created_at: r.9, updated_at: r.10,
+        source_id: r.11, source_type: r.12, is_favorite: r.13, source_name: r.14,
+    }
+}
+
+const SNIPPET_COLS: &str = "s.id, s.trigger, s.label, s.body, s.tags, s.variables, s.is_enabled, s.use_count, s.last_used_at, s.created_at, s.updated_at, s.source_id, s.source_type, s.is_favorite";
+const SNIPPET_COLS_WITH_SOURCE: &str = "s.id, s.trigger, s.label, s.body, s.tags, s.variables, s.is_enabled, s.use_count, s.last_used_at, s.created_at, s.updated_at, s.source_id, s.source_type, s.is_favorite, COALESCE(ss.name, 'Defaults') as source_name";
+
+pub async fn get_snippet(pool: &SqlitePool, id: &str) -> Result<Option<crate::models::Snippet>, sqlx::Error> {
+    let row: Option<SnippetRow> = sqlx::query_as(
+        &format!("SELECT {} FROM snippets s WHERE s.id = ?", SNIPPET_COLS)
+    ).bind(id).fetch_optional(pool).await?;
+
+    Ok(row.map(row_to_snippet))
 }
 
 pub async fn list_snippets(
     pool: &SqlitePool,
     search: Option<&str>,
     tag: Option<&str>,
+    source_id: Option<&str>,
 ) -> Result<Vec<crate::models::Snippet>, sqlx::Error> {
-    let mut sql = String::from("SELECT id, trigger, label, body, tags, variables, is_enabled, use_count, last_used_at, created_at, updated_at FROM snippets WHERE is_enabled = 1");
+    let mut sql = format!("SELECT {} FROM snippets s LEFT JOIN snippet_sources ss ON s.source_id = ss.id WHERE s.is_enabled = 1 AND (s.source_id IS NULL OR ss.is_enabled = 1 OR ss.is_enabled IS NULL)", SNIPPET_COLS_WITH_SOURCE);
     let mut args: Vec<String> = Vec::new();
 
+    if let Some(sid) = source_id {
+        sql.push_str(" AND s.source_id = ?");
+        args.push(sid.to_string());
+    }
     if let Some(s) = search {
-        sql.push_str(" AND (trigger LIKE ? OR label LIKE ? OR body LIKE ? OR tags LIKE ?)");
+        sql.push_str(" AND (s.trigger LIKE ? OR s.label LIKE ? OR s.body LIKE ? OR s.tags LIKE ?)");
         let pattern = format!("%{}%", s);
         args.push(pattern.clone());
         args.push(pattern.clone());
@@ -568,32 +657,26 @@ pub async fn list_snippets(
         args.push(pattern);
     }
     if let Some(t) = tag {
-        sql.push_str(" AND tags LIKE ?");
+        sql.push_str(" AND s.tags LIKE ?");
         args.push(format!("%\"{}\"%" , t));
     }
-    sql.push_str(" ORDER BY use_count DESC, updated_at DESC");
+    sql.push_str(" ORDER BY s.use_count DESC, s.updated_at DESC");
 
-    let mut query = sqlx::query_as::<_, (String, String, Option<String>, String, Option<String>, Option<String>, i32, i64, Option<String>, String, String)>(&sql);
+    let mut query = sqlx::query_as::<_, SnippetRowWithSource>(&sql);
     for arg in &args {
         query = query.bind(arg);
     }
     let rows = query.fetch_all(pool).await?;
 
-    Ok(rows.into_iter().map(|r| crate::models::Snippet {
-        id: r.0, trigger: r.1, label: r.2, body: r.3, tags: r.4, variables: r.5,
-        is_enabled: r.6, use_count: r.7, last_used_at: r.8, created_at: r.9, updated_at: r.10,
-    }).collect())
+    Ok(rows.into_iter().map(row_to_snippet_with_source).collect())
 }
 
 pub async fn list_all_snippets(pool: &SqlitePool) -> Result<Vec<crate::models::Snippet>, sqlx::Error> {
-    let rows: Vec<(String, String, Option<String>, String, Option<String>, Option<String>, i32, i64, Option<String>, String, String)> = sqlx::query_as(
-        "SELECT id, trigger, label, body, tags, variables, is_enabled, use_count, last_used_at, created_at, updated_at FROM snippets ORDER BY updated_at DESC"
+    let rows: Vec<SnippetRowWithSource> = sqlx::query_as(
+        &format!("SELECT {} FROM snippets s LEFT JOIN snippet_sources ss ON s.source_id = ss.id ORDER BY s.updated_at DESC", SNIPPET_COLS_WITH_SOURCE)
     ).fetch_all(pool).await?;
 
-    Ok(rows.into_iter().map(|r| crate::models::Snippet {
-        id: r.0, trigger: r.1, label: r.2, body: r.3, tags: r.4, variables: r.5,
-        is_enabled: r.6, use_count: r.7, last_used_at: r.8, created_at: r.9, updated_at: r.10,
-    }).collect())
+    Ok(rows.into_iter().map(row_to_snippet_with_source).collect())
 }
 
 pub async fn increment_snippet_use(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
@@ -601,6 +684,185 @@ pub async fn increment_snippet_use(pool: &SqlitePool, id: &str) -> Result<(), sq
     sqlx::query("UPDATE snippets SET use_count = use_count + 1, last_used_at = ? WHERE id = ?")
         .bind(&now).bind(id).execute(pool).await?;
     Ok(())
+}
+
+pub async fn list_recent_snippets(pool: &SqlitePool, limit: i64) -> Result<Vec<crate::models::Snippet>, sqlx::Error> {
+    let sql = format!(
+        "SELECT {} FROM snippets s LEFT JOIN snippet_sources ss ON s.source_id = ss.id WHERE s.is_enabled = 1 AND (s.source_id IS NULL OR ss.is_enabled = 1 OR ss.is_enabled IS NULL) AND s.last_used_at IS NOT NULL ORDER BY s.last_used_at DESC LIMIT ?",
+        SNIPPET_COLS_WITH_SOURCE
+    );
+    let rows: Vec<SnippetRowWithSource> = sqlx::query_as(&sql).bind(limit).fetch_all(pool).await?;
+    Ok(rows.into_iter().map(row_to_snippet_with_source).collect())
+}
+
+pub async fn list_favorite_snippets(pool: &SqlitePool) -> Result<Vec<crate::models::Snippet>, sqlx::Error> {
+    let sql = format!(
+        "SELECT {} FROM snippets s LEFT JOIN snippet_sources ss ON s.source_id = ss.id WHERE s.is_enabled = 1 AND (s.source_id IS NULL OR ss.is_enabled = 1 OR ss.is_enabled IS NULL) AND s.is_favorite = 1 ORDER BY s.use_count DESC",
+        SNIPPET_COLS_WITH_SOURCE
+    );
+    let rows: Vec<SnippetRowWithSource> = sqlx::query_as(&sql).fetch_all(pool).await?;
+    Ok(rows.into_iter().map(row_to_snippet_with_source).collect())
+}
+
+pub async fn toggle_snippet_favorite(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
+    let row: Option<(i32,)> = sqlx::query_as("SELECT COALESCE(is_favorite, 0) FROM snippets WHERE id = ?")
+        .bind(id).fetch_optional(pool).await?;
+    let current = row.map(|r| r.0).unwrap_or(0);
+    let new_val = if current == 0 { 1 } else { 0 };
+    sqlx::query("UPDATE snippets SET is_favorite = ?, updated_at = datetime('now') WHERE id = ?")
+        .bind(new_val).bind(id).execute(pool).await?;
+    Ok(new_val == 1)
+}
+
+pub async fn get_expand_prefix(pool: &SqlitePool) -> Result<String, String> {
+    get_setting(pool, "expand_prefix")
+        .await
+        .map_err(|e| e.to_string())
+        .map(|v| v.unwrap_or_else(|| ":".to_string()))
+}
+
+pub async fn set_expand_prefix(pool: &SqlitePool, prefix: &str) -> Result<(), String> {
+    set_setting(pool, "expand_prefix", prefix)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// --- Snippet Source functions ---
+
+pub async fn create_snippet_source(
+    pool: &SqlitePool,
+    name: &str,
+    path: &str,
+    is_folder: bool,
+) -> Result<crate::models::SnippetSource, sqlx::Error> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    let is_folder_val: i32 = if is_folder { 1 } else { 0 };
+
+    sqlx::query(
+        "INSERT INTO snippet_sources (id, name, path, is_folder, is_enabled, auto_reload, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 1, ?, ?)"
+    )
+    .bind(&id).bind(name).bind(path).bind(is_folder_val).bind(&now).bind(&now)
+    .execute(pool).await?;
+
+    get_snippet_source(pool, &id).await.map(|opt| opt.unwrap())
+}
+
+pub async fn get_snippet_source(pool: &SqlitePool, id: &str) -> Result<Option<crate::models::SnippetSource>, sqlx::Error> {
+    let row: Option<(String, String, String, i32, i32, i32, Option<String>, String, String)> = sqlx::query_as(
+        "SELECT id, name, path, is_folder, is_enabled, auto_reload, last_synced_at, created_at, updated_at FROM snippet_sources WHERE id = ?"
+    ).bind(id).fetch_optional(pool).await?;
+
+    Ok(row.map(|r| crate::models::SnippetSource {
+        id: r.0, name: r.1, path: r.2, is_folder: r.3, is_enabled: r.4, auto_reload: r.5,
+        last_synced_at: r.6, created_at: r.7, updated_at: r.8,
+    }))
+}
+
+pub async fn list_snippet_sources(pool: &SqlitePool) -> Result<Vec<crate::models::SnippetSource>, sqlx::Error> {
+    let rows: Vec<(String, String, String, i32, i32, i32, Option<String>, String, String)> = sqlx::query_as(
+        "SELECT id, name, path, is_folder, is_enabled, auto_reload, last_synced_at, created_at, updated_at FROM snippet_sources ORDER BY created_at ASC"
+    ).fetch_all(pool).await?;
+
+    Ok(rows.into_iter().map(|r| crate::models::SnippetSource {
+        id: r.0, name: r.1, path: r.2, is_folder: r.3, is_enabled: r.4, auto_reload: r.5,
+        last_synced_at: r.6, created_at: r.7, updated_at: r.8,
+    }).collect())
+}
+
+pub async fn update_snippet_source(
+    pool: &SqlitePool,
+    id: &str,
+    name: Option<&str>,
+    is_enabled: Option<bool>,
+    auto_reload: Option<bool>,
+) -> Result<(), sqlx::Error> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut sets = vec!["updated_at = ?".to_string()];
+    let mut args: Vec<String> = vec![now];
+
+    if let Some(v) = name { sets.push("name = ?".into()); args.push(v.to_string()); }
+    if let Some(v) = is_enabled { sets.push("is_enabled = ?".into()); args.push(if v { "1" } else { "0" }.to_string()); }
+    if let Some(v) = auto_reload { sets.push("auto_reload = ?".into()); args.push(if v { "1" } else { "0" }.to_string()); }
+
+    let sql = format!("UPDATE snippet_sources SET {} WHERE id = ?", sets.join(", "));
+    let mut query = sqlx::query(&sql);
+    for arg in &args {
+        query = query.bind(arg);
+    }
+    query = query.bind(id);
+    query.execute(pool).await?;
+    Ok(())
+}
+
+pub async fn delete_snippet_source(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
+    // Cascade: delete snippets from this source first
+    sqlx::query("DELETE FROM snippets WHERE source_id = ?").bind(id).execute(pool).await?;
+    let result = sqlx::query("DELETE FROM snippet_sources WHERE id = ?").bind(id).execute(pool).await?;
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn update_snippet_source_synced(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query("UPDATE snippet_sources SET last_synced_at = ?, updated_at = ? WHERE id = ?")
+        .bind(&now).bind(&now).bind(id).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn upsert_source_snippet(
+    pool: &SqlitePool,
+    source_id: &str,
+    trigger: &str,
+    label: Option<&str>,
+    body: &str,
+    tags: Option<&str>,
+    variables: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    let now = chrono::Utc::now().to_rfc3339();
+    // Try to find existing snippet from this source with same trigger
+    let existing: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM snippets WHERE source_id = ? AND trigger = ?"
+    ).bind(source_id).bind(trigger).fetch_optional(pool).await?;
+
+    if let Some((id,)) = existing {
+        sqlx::query("UPDATE snippets SET label = ?, body = ?, tags = ?, variables = ?, updated_at = ? WHERE id = ?")
+            .bind(label).bind(body).bind(tags).bind(variables).bind(&now).bind(&id)
+            .execute(pool).await?;
+    } else {
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO snippets (id, trigger, label, body, tags, variables, is_enabled, use_count, source_id, source_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, 'file', ?, ?)"
+        )
+        .bind(&id).bind(trigger).bind(label).bind(body).bind(tags).bind(variables)
+        .bind(source_id).bind(&now).bind(&now)
+        .execute(pool).await?;
+    }
+    Ok(())
+}
+
+pub async fn remove_stale_source_snippets(
+    pool: &SqlitePool,
+    source_id: &str,
+    active_triggers: &[String],
+) -> Result<usize, sqlx::Error> {
+    if active_triggers.is_empty() {
+        let result = sqlx::query("DELETE FROM snippets WHERE source_id = ?")
+            .bind(source_id).execute(pool).await?;
+        return Ok(result.rows_affected() as usize);
+    }
+
+    // Build placeholders
+    let placeholders: Vec<&str> = active_triggers.iter().map(|_| "?").collect();
+    let sql = format!(
+        "DELETE FROM snippets WHERE source_id = ? AND trigger NOT IN ({})",
+        placeholders.join(", ")
+    );
+    let mut query = sqlx::query(&sql).bind(source_id);
+    for trigger in active_triggers {
+        query = query.bind(trigger);
+    }
+    let result = query.execute(pool).await?;
+    Ok(result.rows_affected() as usize)
 }
 
 // --- Settings functions ---
@@ -612,6 +874,92 @@ pub async fn get_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>,
             .fetch_optional(pool)
             .await?;
     Ok(row.map(|r| r.0))
+}
+
+pub const DEFAULT_HOTKEY_CONFIG: &str = r#"{"bindings":[{"action":"toggle_window","keys":["CommandOrControl+Shift+D"],"enabled":true,"scope":"global","category":"Global","description":"Toggle window"},{"action":"show_command_palette","keys":["CommandOrControl+Shift+K"],"enabled":true,"scope":"global","category":"Global","description":"Command palette (global)"},{"action":"show_command_palette_local","keys":["CommandOrControl+K"],"enabled":true,"scope":"app","category":"Navigation","description":"Command palette"},{"action":"select_next","keys":["j","ArrowDown"],"enabled":true,"scope":"app","category":"Navigation","description":"Next notification"},{"action":"select_prev","keys":["k","ArrowUp"],"enabled":true,"scope":"app","category":"Navigation","description":"Previous notification"},{"action":"focus_search","keys":["f"],"enabled":true,"scope":"app","category":"Navigation","description":"Focus search"},{"action":"clear_selection","keys":["Escape"],"enabled":true,"scope":"app","category":"Navigation","description":"Clear selection"},{"action":"mark_selected_read","keys":["Enter","r"],"enabled":true,"scope":"app","category":"Actions","description":"Mark read"},{"action":"delete_selected","keys":["d","Backspace"],"enabled":true,"scope":"app","category":"Actions","description":"Delete"},{"action":"focus_terminal","keys":["t"],"enabled":true,"scope":"app","category":"Actions","description":"Focus terminal"},{"action":"mark_all_read","keys":["R"],"enabled":true,"scope":"app","category":"Actions","description":"Mark all read"},{"action":"clear_all","keys":["D"],"enabled":true,"scope":"app","category":"Actions","description":"Clear all"},{"action":"filter_all","keys":["1"],"enabled":true,"scope":"app","category":"Filters","description":"All"},{"action":"filter_unread","keys":["2"],"enabled":true,"scope":"app","category":"Filters","description":"Unread"},{"action":"filter_read","keys":["3"],"enabled":true,"scope":"app","category":"Filters","description":"Read"},{"action":"toggle_help","keys":["?"],"enabled":true,"scope":"app","category":"Help","description":"Toggle help"},{"action":"toggle_visual_mode","keys":["v"],"enabled":true,"scope":"app","category":"Visual","description":"Toggle visual mode"},{"action":"visual_toggle_item","keys":[" "],"enabled":true,"scope":"app","category":"Visual","description":"Toggle item selection"}]}"#;
+
+/// Returns the path to `~/.config/dispatch/hotkeys.toml`.
+fn hotkeys_file_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".config").join("dispatch").join("hotkeys.toml"))
+}
+
+/// Reads and parses hotkey config from the TOML file. Returns `None` on any failure.
+fn read_hotkeys_from_file() -> Option<HotkeyConfig> {
+    let path = hotkeys_file_path()?;
+    let contents = std::fs::read_to_string(&path).ok()?;
+    toml::from_str(&contents).ok()
+}
+
+/// Serializes config to TOML and writes to `~/.config/dispatch/hotkeys.toml`.
+fn write_hotkeys_to_file(config: &HotkeyConfig) -> Result<(), String> {
+    let path = hotkeys_file_path().ok_or("Could not determine home directory")?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create config dir: {}", e))?;
+    }
+    let toml_str =
+        toml::to_string_pretty(config).map_err(|e| format!("Failed to serialize TOML: {}", e))?;
+    std::fs::write(&path, toml_str).map_err(|e| format!("Failed to write hotkeys file: {}", e))
+}
+
+/// Merges missing actions from `defaults` into `config`.
+fn merge_defaults(config: &mut HotkeyConfig, defaults: &HotkeyConfig) {
+    let existing: std::collections::HashSet<String> =
+        config.bindings.iter().map(|b| b.action.clone()).collect();
+    for binding in &defaults.bindings {
+        if !existing.contains(&binding.action) {
+            config.bindings.push(binding.clone());
+        }
+    }
+}
+
+pub async fn get_hotkey_config(
+    pool: &SqlitePool,
+) -> Result<HotkeyConfig, String> {
+    let defaults: HotkeyConfig = serde_json::from_str(DEFAULT_HOTKEY_CONFIG)
+        .map_err(|e| format!("Bad default config: {}", e))?;
+
+    // 1. Try TOML file first (source of truth)
+    if let Some(mut config) = read_hotkeys_from_file() {
+        merge_defaults(&mut config, &defaults);
+        return Ok(config);
+    }
+
+    // 2. Fall back to DB
+    let saved_json = get_setting(pool, "hotkey_config")
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let config = match saved_json {
+        Some(json) => {
+            let mut c: HotkeyConfig = serde_json::from_str(&json)
+                .map_err(|e| format!("Failed to parse hotkey config: {}", e))?;
+            merge_defaults(&mut c, &defaults);
+            c
+        }
+        None => defaults,
+    };
+
+    // 3. Persist to TOML file so it exists for next time
+    if let Err(e) = write_hotkeys_to_file(&config) {
+        eprintln!("Warning: could not write hotkeys file: {}", e);
+    }
+
+    Ok(config)
+}
+
+pub async fn set_hotkey_config(
+    pool: &SqlitePool,
+    config: &HotkeyConfig,
+) -> Result<(), String> {
+    // Write to TOML file (source of truth)
+    write_hotkeys_to_file(config)?;
+
+    // Also write to DB as cache
+    let json = serde_json::to_string(config).map_err(|e| e.to_string())?;
+    set_setting(pool, "hotkey_config", &json)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 pub async fn set_setting(pool: &SqlitePool, key: &str, value: &str) -> Result<(), sqlx::Error> {

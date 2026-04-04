@@ -1,0 +1,99 @@
+# Dispatch Expansion Config
+# Package: {PACKAGE_NAME}
+#
+# This file defines text expansion snippets for Dispatch.
+# Edit this file and snippets will auto-sync when you click "Sync" in Dispatch,
+# or when auto-reload is enabled for this source.
+#
+# Trigger syntax: type your trigger text (e.g. ":hello") and Dispatch
+# will expand it to the body text. Use {{variable_name}} for dynamic values.
+#
+# Variable types:
+#   echo      — static text value
+#   date      — current date/time with strftime formatting
+#   clipboard — paste from clipboard
+#   shell     — run a shell command, insert stdout
+#   form      — prompt user for text input at expansion time
+#   choice    — prompt user to pick from a list
+#   random    — pick a random value from a list
+
+name: "{PACKAGE_NAME}"
+
+snippets:
+  # ── Basic snippet (no variables) ────────────────────────
+  - trigger: ":hello"
+    label: "Greeting"
+    body: "Hello from {PACKAGE_NAME}!"
+    tags: [greeting, example]
+
+  # ── Date variable ───────────────────────────────────────
+  - trigger: ":today"
+    label: "Today's date"
+    body: "{{today}}"
+    tags: [date, utility]
+    variables:
+      - name: today
+        type: date
+        params:
+          format: "%Y-%m-%d"
+
+  # ── Shell command ───────────────────────────────────────
+  - trigger: ":branch"
+    label: "Current git branch"
+    body: "{{branch}}"
+    tags: [git, dev]
+    variables:
+      - name: branch
+        type: shell
+        params:
+          cmd: "git rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'not a repo'"
+
+  # ── Form input (prompted at expansion time) ─────────────
+  - trigger: ":ticket"
+    label: "Ticket reference"
+    body: "[{{id}}] {{title}}"
+    tags: [workflow]
+    variables:
+      - name: id
+        type: form
+        params:
+          label: "Ticket ID"
+          default: "PROJ-"
+      - name: title
+        type: form
+        params:
+          label: "Title"
+
+  # ── Choice dropdown ─────────────────────────────────────
+  - trigger: ":status"
+    label: "Status update"
+    body: "Status: {{status}} — {{note}}"
+    tags: [workflow]
+    variables:
+      - name: status
+        type: choice
+        params:
+          label: "Pick status"
+          values:
+            - In Progress
+            - Blocked
+            - Done
+            - Needs Review
+      - name: note
+        type: form
+        params:
+          label: "Optional note"
+
+  # ── Clipboard + form ────────────────────────────────────
+  - trigger: ":link"
+    label: "Markdown link from clipboard"
+    body: "[{{label}}]({{url}})"
+    tags: [markdown, utility]
+    variables:
+      - name: url
+        type: clipboard
+      - name: label
+        type: form
+        params:
+          label: "Link text"
+          default: "link"

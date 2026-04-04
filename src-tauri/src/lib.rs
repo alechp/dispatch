@@ -1,9 +1,12 @@
 mod commands;
 mod db;
 mod expander;
+mod file_parser;
 mod live_listener;
 mod log;
 mod macos_accessibility;
+#[cfg(target_os = "macos")]
+mod macos_listener;
 mod models;
 mod server;
 mod state;
@@ -32,6 +35,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_handle = app.handle().clone();
 
@@ -72,6 +76,35 @@ pub fn run() {
                 // Refresh trigger cache
                 let _ =
                     trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
+
+                // Load persisted Yapture tokens from DB
+                {
+                    let access_token = db::get_setting(&state.db, "yapture_access_token").await.ok().flatten();
+                    let refresh_token = db::get_setting(&state.db, "yapture_refresh_token").await.ok().flatten();
+                    if access_token.is_some() || refresh_token.is_some() {
+                        if let Ok(mut tokens) = state.yapture_tokens.lock() {
+                            tokens.access_token = access_token.clone();
+                            tokens.refresh_token = refresh_token;
+                            tokens.service_token = access_token; // service_token = access_token for push_notification compat
+                        }
+                        dlog!("setup: yapture tokens loaded from DB");
+                    }
+                }
+
+                // Load persisted Yapture v2 tokens from DB
+                {
+                    let v2_access = db::get_setting(&state.db, "yapture_v2_access_token").await.ok().flatten();
+                    let v2_refresh = db::get_setting(&state.db, "yapture_v2_refresh_token").await.ok().flatten();
+                    if v2_access.is_some() || v2_refresh.is_some() {
+                        if let Ok(mut tokens) = state.yapture_v2_tokens.lock() {
+                            tokens.access_token = v2_access.clone();
+                            tokens.refresh_token = v2_refresh;
+                            tokens.service_token = v2_access;
+                        }
+                        dlog!("setup: yapture v2 tokens loaded from DB");
+                    }
+                }
+
                 dlog!("setup: state initialized, trigger cache loaded");
 
                 state
@@ -81,19 +114,31 @@ pub fn run() {
             app.manage(state.clone());
             dlog!("setup: state managed");
 
+            // Log permission state at startup for diagnostics
+            {
+                let has_accessibility = macos_accessibility::check_accessibility();
+                eprintln!(
+                    "[live-expansion] permissions at startup: accessibility={}",
+                    has_accessibility
+                );
+                if !has_accessibility {
+                    eprintln!("[live-expansion] WARNING: Accessibility not granted — keyboard listener and text injection will fail. Will retry automatically.");
+                }
+            }
+
             // Start live expansion listener + match handler
             //
-            // DISABLED on macOS: rdev::listen calls TSMGetInputSourceProperty from a
-            // background thread, but macOS requires it on the main dispatch queue.
-            // This causes EXC_BREAKPOINT / SIGTRAP (_dispatch_assert_queue_fail)
-            // that instantly kills the process. The rdev listener is disabled until
-            // we replace rdev with a main-thread-safe alternative.
-            // See: https://github.com/Narsil/rdev/issues/124
+            // macOS: Uses CGEventTap directly (macos_listener) to avoid rdev's TSM crash.
+            // Other platforms: Uses rdev::listen (live_listener).
             {
-                #[cfg(not(target_os = "macos"))]
                 let (match_tx, match_rx) = crossbeam_channel::unbounded::<live_listener::TriggerMatch>();
+
                 #[cfg(target_os = "macos")]
-                let (_match_tx, match_rx) = crossbeam_channel::unbounded::<live_listener::TriggerMatch>();
+                macos_listener::start_listener(
+                    state.live_expansion_enabled.clone(),
+                    state.trigger_cache.clone(),
+                    match_tx,
+                );
 
                 #[cfg(not(target_os = "macos"))]
                 live_listener::start_listener(
@@ -101,11 +146,6 @@ pub fn run() {
                     state.trigger_cache.clone(),
                     match_tx,
                 );
-
-                #[cfg(target_os = "macos")]
-                {
-                    dlog!("setup: live-expansion listener DISABLED on macOS (rdev TSM crash)");
-                }
 
                 // Spawn tokio task to handle matches
                 let handler_state = state.clone();
@@ -257,6 +297,77 @@ pub fn run() {
                         None => return,
                     };
 
+                    // Handle dispatch://notifications?nid=X
+                    if url_str.starts_with("dispatch://notifications") {
+                        dlog!("[deep-link] notifications: {}", url_str);
+                        if let Some(window) = deep_link_handle.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                            let _ = window.emit("navigate-notifications", ());
+                        }
+                        return;
+                    }
+
+                    // Handle dispatch://focus-terminal?session=X&window=Y&pane=Z
+                    if url_str.starts_with("dispatch://focus-terminal") {
+                        dlog!("[deep-link] focus-terminal: {}", url_str);
+                        let parsed = match url::Url::parse(&url_str) {
+                            Ok(u) => u,
+                            Err(e) => {
+                                dlog!("[deep-link] failed to parse URL: {}", e);
+                                return;
+                            }
+                        };
+                        let params: std::collections::HashMap<String, String> = parsed
+                            .query_pairs()
+                            .map(|(k, v)| (k.to_string(), v.to_string()))
+                            .collect();
+
+                        let session = match params.get("session") {
+                            Some(s) if !s.is_empty() => s.clone(),
+                            _ => {
+                                dlog!("[deep-link] focus-terminal: missing session param");
+                                return;
+                            }
+                        };
+                        let window = params.get("window").cloned();
+                        let pane = params.get("pane").cloned();
+                        let nid = params.get("nid").cloned();
+                        let db = deep_link_state.db.clone();
+                        let token = deep_link_state.yapture_tokens.lock().ok().and_then(|t| t.service_token.clone());
+
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(e) = commands::do_focus_terminal(
+                                &db,
+                                &session,
+                                window.as_deref(),
+                                pane.as_deref(),
+                            ).await {
+                                dlog!("[deep-link] focus-terminal failed: {}", e);
+                            }
+
+                            // Bidirectional sync: complete Yapture task
+                            if let Some(nid) = nid {
+                                let sync_enabled = crate::db::get_setting(&db, "yapture_bidirectional_sync")
+                                    .await.ok().flatten().unwrap_or_else(|| "true".into()) == "true";
+                                if sync_enabled {
+                                    if let Ok(Some(n)) = crate::db::get_notification_by_id(&db, &nid).await {
+                                        if let Some(yapture_id) = n.yapture_task_id {
+                                            if !yapture_id.is_empty() {
+                                                if let Some(config) = crate::yapture::load_config(&db, token).await {
+                                                    if let Err(e) = crate::yapture::complete_yapture_task(&config, &yapture_id).await {
+                                                        dlog!("[deep-link] yapture sync failed: {}", e);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                        return;
+                    }
+
                     if !url_str.starts_with("dispatch://oauth/callback") {
                         return;
                     }
@@ -294,10 +405,10 @@ pub fn run() {
                     };
 
                     // Validate state and get verifier
-                    let oauth_state = {
+                    let (oauth_version, oauth_state) = {
                         let mut pending = deep_link_state.oauth_pending.lock().unwrap();
                         match pending.take() {
-                            Some(os) if os.state == callback_state => os,
+                            Some(po) if po.state.state == callback_state => (po.version, po.state),
                             Some(_) => {
                                 eprintln!("[oauth] state mismatch");
                                 return;
@@ -313,129 +424,249 @@ pub fn run() {
                     let handle_for_async = deep_link_handle.clone();
 
                     tauri::async_runtime::spawn(async move {
-                        let api_url = crate::db::get_setting(
-                            &state_for_async.db,
-                            "yapture_api_url",
-                        )
-                        .await
-                        .ok()
-                        .flatten()
-                        .unwrap_or_else(|| "https://api.yapture.app".to_string());
+                        if oauth_version == "v1" {
+                            // === V1 OAuth flow ===
+                            let api_url = crate::db::get_setting(
+                                &state_for_async.db,
+                                "yapture_api_url",
+                            )
+                            .await
+                            .ok()
+                            .flatten()
+                            .unwrap_or_else(|| "https://api.yapture.app".to_string());
 
-                        // Exchange code for tokens
-                        let tokens =
-                            match yapture::exchange_code(&api_url, &code, &oauth_state).await {
+                            // Exchange code for tokens
+                            let tokens =
+                                match yapture::exchange_code(&api_url, &code, &oauth_state).await {
+                                    Ok(t) => t,
+                                    Err(e) => {
+                                        eprintln!("[oauth] token exchange failed: {}", e);
+                                        return;
+                                    }
+                                };
+
+                            eprintln!("[oauth] tokens received");
+
+                            // Store tokens in AppState (in-memory)
+                            if let Ok(mut t) = state_for_async.yapture_tokens.lock() {
+                                t.access_token = Some(tokens.access_token.clone());
+                                t.refresh_token = tokens.refresh_token.clone();
+                                t.service_token = Some(tokens.access_token.clone());
+                            }
+
+                            // Persist tokens to DB for survival across restarts
+                            let _ = crate::db::set_setting(
+                                &state_for_async.db,
+                                "yapture_access_token",
+                                &tokens.access_token,
+                            ).await;
+                            if let Some(ref rt) = tokens.refresh_token {
+                                let _ = crate::db::set_setting(
+                                    &state_for_async.db,
+                                    "yapture_refresh_token",
+                                    rt,
+                                ).await;
+                            }
+
+                            // Fetch user info
+                            match yapture::fetch_userinfo(&api_url, &tokens.access_token).await {
+                                Ok(info) => {
+                                    eprintln!("[oauth] user: {:?}", info);
+                                    let _ = crate::db::set_setting(
+                                        &state_for_async.db,
+                                        "yapture_user_id",
+                                        &info.sub,
+                                    )
+                                    .await;
+                                    if let Some(name) = &info.name {
+                                        let _ = crate::db::set_setting(
+                                            &state_for_async.db,
+                                            "yapture_user_name",
+                                            name,
+                                        )
+                                        .await;
+                                    }
+                                    if let Some(email) = &info.email {
+                                        let _ = crate::db::set_setting(
+                                            &state_for_async.db,
+                                            "yapture_user_email",
+                                            email,
+                                        )
+                                        .await;
+                                    }
+                                    let _ = crate::db::set_setting(
+                                        &state_for_async.db,
+                                        "yapture_enabled",
+                                        "1",
+                                    )
+                                    .await;
+
+                                    // Emit event to frontend
+                                    if let Some(window) =
+                                        handle_for_async.get_webview_window("main")
+                                    {
+                                        let _ = window.emit(
+                                            "yapture-connected",
+                                            &yapture::YaptureConnectionStatus {
+                                                connected: true,
+                                                user_name: info.name,
+                                                user_email: info.email,
+                                            },
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("[oauth] userinfo fetch failed: {}", e);
+                                }
+                            }
+                        } else {
+                            // === V2 OAuth flow ===
+                            let auth_url = crate::db::get_setting(&state_for_async.db, "yapture_v2_auth_url")
+                                .await.ok().flatten()
+                                .unwrap_or_else(|| "http://localhost:4800".to_string());
+
+                            let tokens = match yapture::exchange_code_v2(&auth_url, &code, &oauth_state).await {
                                 Ok(t) => t,
                                 Err(e) => {
-                                    eprintln!("[oauth] token exchange failed: {}", e);
+                                    eprintln!("[oauth-v2] token exchange failed: {}", e);
                                     return;
                                 }
                             };
 
-                        eprintln!("[oauth] tokens received");
+                            eprintln!("[oauth-v2] tokens received");
 
-                        // Store tokens in AppState
-                        if let Ok(mut t) = state_for_async.yapture_tokens.lock() {
-                            t.access_token = Some(tokens.access_token.clone());
-                            t.refresh_token = tokens.refresh_token.clone();
-                            t.service_token = Some(tokens.access_token.clone());
-                        }
+                            if let Ok(mut t) = state_for_async.yapture_v2_tokens.lock() {
+                                t.access_token = Some(tokens.access_token.clone());
+                                t.refresh_token = tokens.refresh_token.clone();
+                                t.service_token = Some(tokens.access_token.clone());
+                            }
 
-                        // Fetch user info
-                        match yapture::fetch_userinfo(&api_url, &tokens.access_token).await {
-                            Ok(info) => {
-                                eprintln!("[oauth] user: {:?}", info);
-                                let _ = crate::db::set_setting(
-                                    &state_for_async.db,
-                                    "yapture_user_id",
-                                    &info.sub,
-                                )
-                                .await;
+                            let _ = crate::db::set_setting(&state_for_async.db, "yapture_v2_access_token", &tokens.access_token).await;
+                            if let Some(ref rt) = tokens.refresh_token {
+                                let _ = crate::db::set_setting(&state_for_async.db, "yapture_v2_refresh_token", rt).await;
+                            }
+
+                            if let Some(info) = yapture::decode_jwt_claims(&tokens.access_token) {
+                                let _ = crate::db::set_setting(&state_for_async.db, "yapture_v2_user_id", &info.sub).await;
                                 if let Some(name) = &info.name {
-                                    let _ = crate::db::set_setting(
-                                        &state_for_async.db,
-                                        "yapture_user_name",
-                                        name,
-                                    )
-                                    .await;
+                                    let _ = crate::db::set_setting(&state_for_async.db, "yapture_v2_user_name", name).await;
                                 }
                                 if let Some(email) = &info.email {
-                                    let _ = crate::db::set_setting(
-                                        &state_for_async.db,
-                                        "yapture_user_email",
-                                        email,
-                                    )
-                                    .await;
+                                    let _ = crate::db::set_setting(&state_for_async.db, "yapture_v2_user_email", email).await;
                                 }
-                                let _ = crate::db::set_setting(
-                                    &state_for_async.db,
-                                    "yapture_enabled",
-                                    "1",
-                                )
-                                .await;
+                                let _ = crate::db::set_setting(&state_for_async.db, "yapture_v2_enabled", "1").await;
 
-                                // Emit event to frontend
-                                if let Some(window) =
-                                    handle_for_async.get_webview_window("main")
-                                {
-                                    let _ = window.emit(
-                                        "yapture-connected",
-                                        &yapture::YaptureConnectionStatus {
-                                            connected: true,
-                                            user_name: info.name,
-                                            user_email: info.email,
-                                        },
-                                    );
+                                if let Some(window) = handle_for_async.get_webview_window("main") {
+                                    let _ = window.emit("yapture-v2-connected", &yapture::YaptureConnectionStatus {
+                                        connected: true,
+                                        user_name: info.name,
+                                        user_email: info.email,
+                                    });
                                 }
-                            }
-                            Err(e) => {
-                                eprintln!("[oauth] userinfo fetch failed: {}", e);
+                            } else {
+                                eprintln!("[oauth-v2] failed to decode JWT claims from access token");
                             }
                         }
                     });
                 });
             }
 
-            // Global hotkeys: Cmd+Shift+D to toggle window, Cmd+Shift+E for expander
+            // Global hotkeys: config-driven from DB
             dlog!("setup: registering global shortcuts");
             use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
-            let shortcut: tauri_plugin_global_shortcut::Shortcut =
-                "CommandOrControl+Shift+D".parse().unwrap();
-            let expander_shortcut: tauri_plugin_global_shortcut::Shortcut =
-                "CommandOrControl+Shift+E".parse().unwrap();
+
+            // Load hotkey config from DB and build the shortcut map
+            let hotkey_config = tauri::async_runtime::block_on(async {
+                db::get_hotkey_config(&state.db).await.unwrap_or_else(|e| {
+                    eprintln!("[hotkeys] failed to load config, using defaults: {}", e);
+                    serde_json::from_str(db::DEFAULT_HOTKEY_CONFIG).unwrap()
+                })
+            });
+
+            {
+                let mut map = state.global_shortcut_map.write();
+                for binding in &hotkey_config.bindings {
+                    if binding.scope == "global" && binding.enabled {
+                        for key_str in &binding.keys {
+                            map.insert(key_str.clone(), binding.action.clone());
+                        }
+                    }
+                }
+            }
+
+            let shortcut_map = state.global_shortcut_map.clone();
             let shortcut_handle = app.handle().clone();
             app.handle().plugin(
                 tauri_plugin_global_shortcut::Builder::new()
                     .with_handler(move |_app, shortcut, event| {
                         if event.state() == ShortcutState::Pressed {
-                            if let Some(window) = shortcut_handle.get_webview_window("main") {
-                                // Check which shortcut was pressed
-                                let shortcut_str = shortcut.to_string();
-                                if shortcut_str.contains("KeyD")
-                                    || shortcut_str.contains("D") && !shortcut_str.contains("E")
-                                {
-                                    // Toggle window visibility
-                                    if window.is_visible().unwrap_or(false) {
-                                        let _ = window.hide();
-                                    } else {
-                                        let _ = window.show();
-                                        let _ = window.set_focus();
+                            let shortcut_str = shortcut.to_string();
+                            // Look up action in the shared map
+                            let action = {
+                                let map = shortcut_map.read();
+                                // Try exact match first, then try matching by key code
+                                map.iter()
+                                    .find(|(registered, _)| {
+                                        if let (Ok(a), Ok(b)) = (
+                                            registered.parse::<tauri_plugin_global_shortcut::Shortcut>(),
+                                            shortcut_str.parse::<tauri_plugin_global_shortcut::Shortcut>(),
+                                        ) {
+                                            a == b
+                                        } else {
+                                            false
+                                        }
+                                    })
+                                    .map(|(_, action)| action.clone())
+                            };
+
+                            if let Some(action) = action {
+                                if let Some(window) = shortcut_handle.get_webview_window("main") {
+                                    match action.as_str() {
+                                        "toggle_window" => {
+                                            if window.is_visible().unwrap_or(false) {
+                                                let _ = window.hide();
+                                            } else {
+                                                let _ = window.show();
+                                                let _ = window.set_focus();
+                                                let _ = window.emit("auto-select-first", ());
+                                            }
+                                        }
+                                        "show_command_palette" => {
+                                            let _ = window.show();
+                                            let _ = window.set_focus();
+                                            let _ = window.emit("show-command-palette", ());
+                                        }
+                                        // Keep backwards compat for old saved configs
+                                        "show_expander" => {
+                                            let _ = window.show();
+                                            let _ = window.set_focus();
+                                            let _ = window.emit("show-command-palette", ());
+                                        }
+                                        _ => {}
                                     }
-                                } else if shortcut_str.contains("KeyE")
-                                    || shortcut_str.contains("E")
-                                {
-                                    // Show window and emit expander event
-                                    let _ = window.show();
-                                    let _ = window.set_focus();
-                                    let _ = window.emit("show-expander-palette", ());
                                 }
                             }
                         }
                     })
                     .build(),
             )?;
-            app.global_shortcut().register(shortcut)?;
-            app.global_shortcut().register(expander_shortcut)?;
+
+            // Register only enabled global shortcuts from config
+            for binding in &hotkey_config.bindings {
+                if binding.scope == "global" && binding.enabled {
+                    for key_str in &binding.keys {
+                        if let Ok(s) = key_str.parse::<tauri_plugin_global_shortcut::Shortcut>() {
+                            if let Err(e) = app.global_shortcut().register(s) {
+                                eprintln!("[hotkeys] failed to register {}: {}", key_str, e);
+                            } else {
+                                eprintln!("[hotkeys] registered global shortcut: {} -> {}", key_str, binding.action);
+                            }
+                        } else {
+                            eprintln!("[hotkeys] failed to parse shortcut string: {}", key_str);
+                        }
+                    }
+                }
+            }
 
             dlog!("setup: shortcuts registered");
 
@@ -484,22 +715,69 @@ pub fn run() {
             commands::set_live_expansion_enabled,
             commands::check_accessibility_permission,
             commands::request_accessibility_permission,
+            commands::get_hotkey_config,
+            commands::set_hotkey_config,
             commands::get_yapture_config,
             commands::set_yapture_config,
             commands::test_yapture_connection,
             commands::yapture_start_oauth,
+            commands::yapture_refresh,
             commands::yapture_disconnect,
+            commands::yapture_v2_start_oauth,
+            commands::yapture_v2_disconnect,
+            commands::get_yapture_v2_status,
+            commands::set_yapture_v2_config,
+            commands::test_yapture_v2_connection,
+            commands::yapture_detect_version,
             commands::get_yapture_connection_status,
+            commands::check_accessibility_trusted,
+            commands::get_expansion_diagnostics,
+            commands::open_privacy_settings,
+            commands::test_text_injection,
+            commands::copy_to_clipboard,
+            commands::get_notification_banner_config,
+            commands::set_notification_banner_config,
+            commands::get_yapture_sync_enabled,
+            commands::set_yapture_sync_enabled,
+            commands::list_recent_snippets,
+            commands::list_favorite_snippets,
+            commands::toggle_snippet_favorite,
+            commands::get_expand_prefix,
+            commands::set_expand_prefix,
+            commands::add_snippet_source,
+            commands::list_snippet_sources,
+            commands::update_snippet_source,
+            commands::remove_snippet_source,
+            commands::sync_snippet_source,
+            commands::sync_all_sources,
+            commands::create_boilerplate_config,
+            commands::ensure_default_source,
+            commands::get_expansions_directory,
+            commands::refresh_triggers,
+            commands::get_trigger_cache_count,
+            commands::read_source_file,
+            commands::write_source_file,
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri application")
-        .run(|_app_handle, event| {
+        .run(|app_handle, event| {
             match event {
                 tauri::RunEvent::ExitRequested { api, .. } => {
                     // Prevent the app from exiting when all windows close.
                     // This is a tray app — it should keep running in the background.
                     dlog!("RunEvent::ExitRequested — preventing exit (tray app)");
                     api.prevent_exit();
+                }
+                // macOS: show window when user CMD+TABs to app or clicks dock icon
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen { has_visible_windows, .. } => {
+                    dlog!("RunEvent::Reopen has_visible_windows={}", has_visible_windows);
+                    if let Some(window) = app_handle.get_webview_window("main") {
+                        if !has_visible_windows {
+                            let _ = window.show();
+                        }
+                        let _ = window.set_focus();
+                    }
                 }
                 tauri::RunEvent::WindowEvent {
                     label,
@@ -522,7 +800,9 @@ pub fn run() {
                 tauri::RunEvent::Exit => {
                     dlog!("RunEvent::Exit — app exiting");
                 }
-                _ => {}
+                _ => {
+                    let _ = &app_handle; // suppress unused warning
+                }
             }
         });
 

@@ -15,6 +15,7 @@ pub struct Notification {
     pub is_read: i32,
     pub created_at: String,
     pub read_at: Option<String>,
+    pub yapture_task_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -104,6 +105,36 @@ pub struct Snippet {
     pub last_used_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub source_id: Option<String>,
+    #[serde(default)]
+    pub source_type: Option<String>,
+    #[serde(default)]
+    pub is_favorite: Option<i32>,
+    /// Populated by JOIN, not a real column
+    #[serde(default)]
+    pub source_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnippetSource {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub is_folder: i32,
+    pub is_enabled: i32,
+    pub auto_reload: i32,
+    pub last_synced_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncResult {
+    pub added: usize,
+    pub updated: usize,
+    pub removed: usize,
+    pub errors: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,4 +144,19 @@ pub struct VariableDef {
     pub var_type: String,
     #[serde(default)]
     pub params: std::collections::HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HotkeyBinding {
+    pub action: String,
+    pub keys: Vec<String>,
+    pub enabled: bool,
+    pub scope: String,
+    pub category: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HotkeyConfig {
+    pub bindings: Vec<HotkeyBinding>,
 }

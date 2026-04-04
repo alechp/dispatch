@@ -1,5 +1,6 @@
 use parking_lot::RwLock;
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -12,8 +13,16 @@ pub struct AppState {
     pub tx: broadcast::Sender<Notification>,
     pub live_expansion_enabled: Arc<AtomicBool>,
     pub trigger_cache: Arc<RwLock<Vec<TriggerEntry>>>,
-    pub oauth_pending: std::sync::Mutex<Option<crate::yapture::OAuthState>>,
-    pub yapture_tokens: std::sync::Mutex<YaptureTokens>,
+    pub oauth_pending: std::sync::Mutex<Option<PendingOAuth>>,
+    pub yapture_tokens: std::sync::Mutex<YaptureTokens>,        // v1
+    pub yapture_v2_tokens: std::sync::Mutex<YaptureTokens>,     // v2
+    /// Maps global shortcut string (e.g. "CommandOrControl+Shift+D") → action name
+    pub global_shortcut_map: Arc<RwLock<HashMap<String, String>>>,
+}
+
+pub struct PendingOAuth {
+    pub version: String,  // "v1" or "v2"
+    pub state: crate::yapture::OAuthState,
 }
 
 #[derive(Default)]
@@ -33,6 +42,8 @@ impl AppState {
             trigger_cache: Arc::new(RwLock::new(Vec::new())),
             oauth_pending: std::sync::Mutex::new(None),
             yapture_tokens: std::sync::Mutex::new(YaptureTokens::default()),
+            yapture_v2_tokens: std::sync::Mutex::new(YaptureTokens::default()),
+            global_shortcut_map: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
