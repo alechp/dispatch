@@ -1,6 +1,16 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import type { Notification } from "../lib/types";
 
+function displayTitle(n: Notification): string {
+  if (n.tmux_window) {
+    const action = n.title.includes(" — ") ? n.title.split(" — ").slice(1).join(" — ") : n.title;
+    const paneName = n.project || n.tmux_pane;
+    const location = paneName ? `${n.tmux_window} > ${paneName}` : n.tmux_window;
+    return `${location} : ${action}`;
+  }
+  return n.title;
+}
+
 interface NotificationBannerProps {
   /** Queue of notifications to display, newest first. */
   queue: Notification[];
@@ -158,7 +168,7 @@ export function NotificationBanner({
         </div>
 
         {/* Title */}
-        <p className="text-xs text-text-primary truncate">{current.title}</p>
+        <p className="text-xs text-text-primary truncate">{displayTitle(current)}</p>
 
         {/* Body preview */}
         {current.body && (

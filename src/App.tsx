@@ -46,6 +46,8 @@ export default function App() {
   const [expandPrefix, setExpandPrefix] = useState(":");
   const [visualAnchor, setVisualAnchor] = useState<number | null>(null);
   const [bannerConfig, setBannerConfig] = useState<NotificationBannerConfig>(DEFAULT_BANNER_CONFIG);
+  const [newConfigPrompt, setNewConfigPrompt] = useState<{ folder: string; defaultName: string } | null>(null);
+  const [newConfigName, setNewConfigName] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
 
   const queryFilters: QueryFilters = {
@@ -175,17 +177,29 @@ export default function App() {
       if (!folder) return;
       const path = typeof folder === "string" ? folder : (folder as any);
       if (!path) return;
-      const name = window.prompt("Package name:", path.split("/").pop() || "snippets");
-      if (!name) return;
-      const source = await createBoilerplateConfig(path, name);
-      const result = await syncSnippetSource(source.id);
-      toastCtx.showToast(`Created config with ${result.added} snippets in ${path}`);
-      setActiveScreen("expander");
+      const defaultName = path.split("/").pop() || "snippets";
+      setNewConfigName(defaultName);
+      setNewConfigPrompt({ folder: path, defaultName });
     } catch (err: any) {
       console.error("Boilerplate failed:", err);
       toastCtx.showToast(`Failed: ${err}`);
     }
   }, [toastCtx]);
+
+  const handleNewConfigConfirm = useCallback(async () => {
+    if (!newConfigPrompt || !newConfigName.trim()) return;
+    try {
+      const source = await createBoilerplateConfig(newConfigPrompt.folder, newConfigName.trim());
+      const result = await syncSnippetSource(source.id);
+      toastCtx.showToast(`Created config with ${result.added} snippets in ${newConfigPrompt.folder}`);
+      setActiveScreen("settings");
+    } catch (err: any) {
+      console.error("Boilerplate failed:", err);
+      toastCtx.showToast(`Failed: ${err}`);
+    } finally {
+      setNewConfigPrompt(null);
+    }
+  }, [newConfigPrompt, newConfigName, toastCtx]);
 
   // Reset selection when filter or search changes
   useEffect(() => {
@@ -351,6 +365,42 @@ export default function App() {
   return (
     <ToastContext.Provider value={toastCtx}>
     <div className="flex flex-col h-screen">
+      {/* New config name prompt */}
+      {newConfigPrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-surface-raised border border-border-subtle rounded-lg p-4 w-72 shadow-xl">
+            <label className="block text-xs font-semibold text-text-secondary mb-2">
+              Package name
+            </label>
+            <input
+              type="text"
+              autoFocus
+              value={newConfigName}
+              onChange={(e) => setNewConfigName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleNewConfigConfirm();
+                if (e.key === "Escape") setNewConfigPrompt(null);
+              }}
+              className="w-full bg-surface-overlay border border-border-subtle rounded-md px-3 py-1.5 text-sm text-text-primary font-mono focus:outline-none focus:border-accent/50 transition-colors mb-3"
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setNewConfigPrompt(null)}
+                className="text-xs text-text-tertiary hover:text-text-secondary transition-colors px-3 py-1"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleNewConfigConfirm}
+                disabled={!newConfigName.trim()}
+                className="text-xs text-accent hover:text-accent-hover transition-colors px-3 py-1 disabled:opacity-40"
+              >
+                Create
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <Header
         unreadCount={filter === "all" ? unreadCount : total}
         onMarkAllRead={markAllRead}
@@ -421,16 +471,18 @@ export default function App() {
           expandPrefix={expandPrefix}
         />
       )}
-      <NotificationBanner
-        queue={bannerQueue}
-        onDismiss={(id) => setBannerQueue((prev) => prev.filter((n) => n.id !== id))}
-        onDismissAll={() => setBannerQueue([])}
-        onFocusTerminal={handleFocusTerminal}
-        onViewInFeed={() => {
-          setActiveScreen("feed");
-          setBannerQueue([]);
-        }}
-      />
+      {bannerConfig.globalEnabled && bannerConfig.screens[currentScreenKey] && (
+        <NotificationBanner
+          queue={bannerQueue}
+          onDismiss={(id) => setBannerQueue((prev) => prev.filter((n) => n.id !== id))}
+          onDismissAll={() => setBannerQueue([])}
+          onFocusTerminal={handleFocusTerminal}
+          onViewInFeed={() => {
+            setActiveScreen("feed");
+            setBannerQueue([]);
+          }}
+        />
+      )}
       <Toast />
     </div>
     </ToastContext.Provider>

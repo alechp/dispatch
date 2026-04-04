@@ -72,7 +72,11 @@ function envFromUrl(url: string): YaptureEnv {
   return "production";
 }
 
+type YaptureVersion = "v1" | "v2";
+
 function YaptureTab() {
+  const [version, setVersion] = useState<YaptureVersion>("v2");
+
   // ── v1 state ──
   const [config, setConfig] = useState<YaptureConfig | null>(null);
   const [connection, setConnection] = useState<YaptureConnectionStatus | null>(null);
@@ -266,186 +270,179 @@ function YaptureTab() {
 
   return (
     <div className="space-y-4">
-      {/* ── Yapture v1 Section ── */}
+      {/* ── Yapture Version Selector ── */}
       <div>
-        <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2 px-1">
-          Yapture v1
-        </h3>
-
-        {connection.connected ? (
-          <div className="space-y-3">
-            {/* v1 connection status card */}
-            <div className="bg-surface-raised border border-border-subtle rounded-lg p-4">
-              <div className="flex items-start justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-success" />
-                    <span className="text-sm font-medium text-text-primary">
-                      Connected as {connection.userName || "Unknown"}
-                    </span>
-                  </div>
-                  {connection.userEmail && (
-                    <p className="text-xs text-text-secondary mt-1 ml-4">{connection.userEmail}</p>
-                  )}
-                </div>
-                <button
-                  onClick={handleDisconnect}
-                  className="text-xs text-text-tertiary hover:text-error transition-colors"
-                >
-                  Disconnect
-                </button>
-              </div>
-            </div>
-
-            {/* v1 enabled toggle */}
-            <div className="flex items-center justify-between px-1">
-              <span className="text-sm text-text-primary">Enabled</span>
-              <button
-                onClick={handleToggleEnabled}
-                className={`relative w-10 h-5 rounded-full transition-colors ${
-                  config.enabled ? "bg-accent" : "bg-surface-overlay border border-border-subtle"
-                }`}
-              >
-                <span
-                  className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                    config.enabled ? "translate-x-5" : ""
-                  }`}
-                />
-              </button>
-            </div>
-
-            {/* v1 test connection */}
-            <div className="flex items-center gap-3 px-1">
-              <button
-                onClick={handleTestConnection}
-                disabled={testResult === "testing"}
-                className="px-4 py-1.5 text-xs font-medium text-text-primary bg-surface-overlay border border-border-subtle rounded-md hover:border-accent/30 transition-colors disabled:opacity-50"
-              >
-                {testResult === "testing" ? "Testing..." : "Test Connection"}
-              </button>
-              {testResult === "success" && (
-                <span className="text-xs text-success">Connected</span>
-              )}
-              {testResult === "error" && (
-                <span className="text-xs text-error">Connection failed</span>
-              )}
-            </div>
-          </div>
-        ) : (
-          <div className="bg-surface-raised border border-border-subtle rounded-lg p-4">
-            <p className="text-xs text-text-secondary mb-3">
-              Connect your Yapture v1 account to push notifications as tasks.
-            </p>
+        <label className="block text-xs font-semibold text-text-secondary mb-2 px-1">
+          Yapture Version
+        </label>
+        <div className="flex gap-1">
+          {(["v2", "v1"] as YaptureVersion[]).map((v) => (
             <button
-              onClick={handleConnect}
-              disabled={connecting}
-              className="w-full px-4 py-2 text-sm font-medium text-white bg-accent hover:bg-accent-hover rounded-md transition-colors disabled:opacity-50"
-            >
-              {connecting ? "Connecting..." : "Connect with Yapture v1"}
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* ── Yapture v2 Section ── */}
-      <div>
-        <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2 px-1">
-          Yapture v2
-        </h3>
-
-        {v2Status?.connected ? (
-          <div className="space-y-3">
-            {/* v2 connection status card */}
-            <div className="bg-surface-raised border border-border-subtle rounded-lg p-4">
-              <div className="flex items-start justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-success" />
-                    <span className="text-sm font-medium text-text-primary">
-                      Connected as {v2Status.userName || "Unknown"}
-                    </span>
-                  </div>
-                  {v2Status.userEmail && (
-                    <p className="text-xs text-text-secondary mt-1 ml-4">{v2Status.userEmail}</p>
-                  )}
-                </div>
-                <button
-                  onClick={handleV2Disconnect}
-                  className="text-xs text-text-tertiary hover:text-error transition-colors"
-                >
-                  Disconnect
-                </button>
-              </div>
-            </div>
-
-            {/* v2 enabled toggle */}
-            <div className="flex items-center justify-between px-1">
-              <span className="text-sm text-text-primary">Enabled</span>
-              <button
-                onClick={handleV2EnabledToggle}
-                className={`relative w-10 h-5 rounded-full transition-colors ${
-                  v2Status.enabled ? "bg-accent" : "bg-surface-overlay border border-border-subtle"
-                }`}
-              >
-                <span
-                  className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                    v2Status.enabled ? "translate-x-5" : ""
-                  }`}
-                />
-              </button>
-            </div>
-
-            {/* v2 test connection */}
-            <div className="flex items-center gap-3 px-1">
-              <button
-                onClick={handleV2TestConnection}
-                disabled={v2TestResult === "testing"}
-                className="px-4 py-1.5 text-xs font-medium text-text-primary bg-surface-overlay border border-border-subtle rounded-md hover:border-accent/30 transition-colors disabled:opacity-50"
-              >
-                {v2TestResult === "testing" ? "Testing..." : "Test Connection"}
-              </button>
-              {v2TestResult === "success" && (
-                <span className="text-xs text-success">Connected</span>
-              )}
-              {v2TestResult === "error" && (
-                <span className="text-xs text-error">Connection failed</span>
-              )}
-            </div>
-          </div>
-        ) : (
-          <div className="bg-surface-raised border border-border-subtle rounded-lg p-4">
-            <p className="text-xs text-text-secondary mb-3">
-              Connect your Yapture v2 account for the latest sync features.
-            </p>
-            <button
-              onClick={handleV2Connect}
-              disabled={v2Connecting}
-              className="w-full px-4 py-2 text-sm font-medium text-white bg-accent hover:bg-accent-hover rounded-md transition-colors disabled:opacity-50"
-            >
-              {v2Connecting ? "Connecting..." : "Connect with Yapture v2"}
-            </button>
-          </div>
-        )}
-
-        {/* v2 enabled toggle (when not connected) */}
-        {v2Status && !v2Status.connected && (
-          <div className="flex items-center justify-between px-1 mt-3">
-            <span className="text-sm text-text-primary">Enabled</span>
-            <button
-              onClick={handleV2EnabledToggle}
-              className={`relative w-10 h-5 rounded-full transition-colors ${
-                v2Status.enabled ? "bg-accent" : "bg-surface-overlay border border-border-subtle"
+              key={v}
+              onClick={() => setVersion(v)}
+              className={`px-4 py-1.5 text-xs font-medium rounded-md border transition-colors ${
+                version === v
+                  ? "bg-accent/15 text-accent border-accent/30"
+                  : "bg-surface-overlay text-text-secondary border-border-subtle hover:border-accent/30"
               }`}
             >
-              <span
-                className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                  v2Status.enabled ? "translate-x-5" : ""
-                }`}
-              />
+              {v.toUpperCase()}{v === "v2" ? " (Recommended)" : ""}
             </button>
-          </div>
-        )}
+          ))}
+        </div>
       </div>
+
+      {/* ── Yapture v1 Section ── */}
+      {version === "v1" && (
+        <div>
+          {connection.connected ? (
+            <div className="space-y-3">
+              <div className="bg-surface-raised border border-border-subtle rounded-lg p-4">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-2 h-2 rounded-full bg-success" />
+                      <span className="text-sm font-medium text-text-primary">
+                        Connected as {connection.userName || "Unknown"}
+                      </span>
+                    </div>
+                    {connection.userEmail && (
+                      <p className="text-xs text-text-secondary mt-1 ml-4">{connection.userEmail}</p>
+                    )}
+                  </div>
+                  <button
+                    onClick={handleDisconnect}
+                    className="text-xs text-text-tertiary hover:text-error transition-colors"
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between px-1">
+                <span className="text-sm text-text-primary">Enabled</span>
+                <button
+                  onClick={handleToggleEnabled}
+                  className={`relative w-10 h-5 rounded-full transition-colors ${
+                    config.enabled ? "bg-accent" : "bg-surface-overlay border border-border-subtle"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                      config.enabled ? "translate-x-5" : ""
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <div className="flex items-center gap-3 px-1">
+                <button
+                  onClick={handleTestConnection}
+                  disabled={testResult === "testing"}
+                  className="px-4 py-1.5 text-xs font-medium text-text-primary bg-surface-overlay border border-border-subtle rounded-md hover:border-accent/30 transition-colors disabled:opacity-50"
+                >
+                  {testResult === "testing" ? "Testing..." : "Test Connection"}
+                </button>
+                {testResult === "success" && (
+                  <span className="text-xs text-success">Connected</span>
+                )}
+                {testResult === "error" && (
+                  <span className="text-xs text-error">Connection failed</span>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="bg-surface-raised border border-border-subtle rounded-lg p-4">
+              <p className="text-xs text-text-secondary mb-3">
+                Connect your Yapture v1 account to push notifications as tasks.
+              </p>
+              <button
+                onClick={handleConnect}
+                disabled={connecting}
+                className="w-full px-4 py-2 text-sm font-medium text-white bg-accent hover:bg-accent-hover rounded-md transition-colors disabled:opacity-50"
+              >
+                {connecting ? "Connecting..." : "Connect with Yapture"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Yapture v2 Section ── */}
+      {version === "v2" && (
+        <div>
+          {v2Status?.connected ? (
+            <div className="space-y-3">
+              <div className="bg-surface-raised border border-border-subtle rounded-lg p-4">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-2 h-2 rounded-full bg-success" />
+                      <span className="text-sm font-medium text-text-primary">
+                        Connected as {v2Status.userName || "Unknown"}
+                      </span>
+                    </div>
+                    {v2Status.userEmail && (
+                      <p className="text-xs text-text-secondary mt-1 ml-4">{v2Status.userEmail}</p>
+                    )}
+                  </div>
+                  <button
+                    onClick={handleV2Disconnect}
+                    className="text-xs text-text-tertiary hover:text-error transition-colors"
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between px-1">
+                <span className="text-sm text-text-primary">Enabled</span>
+                <button
+                  onClick={handleV2EnabledToggle}
+                  className={`relative w-10 h-5 rounded-full transition-colors ${
+                    v2Status.enabled ? "bg-accent" : "bg-surface-overlay border border-border-subtle"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                      v2Status.enabled ? "translate-x-5" : ""
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <div className="flex items-center gap-3 px-1">
+                <button
+                  onClick={handleV2TestConnection}
+                  disabled={v2TestResult === "testing"}
+                  className="px-4 py-1.5 text-xs font-medium text-text-primary bg-surface-overlay border border-border-subtle rounded-md hover:border-accent/30 transition-colors disabled:opacity-50"
+                >
+                  {v2TestResult === "testing" ? "Testing..." : "Test Connection"}
+                </button>
+                {v2TestResult === "success" && (
+                  <span className="text-xs text-success">Connected</span>
+                )}
+                {v2TestResult === "error" && (
+                  <span className="text-xs text-error">Connection failed</span>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="bg-surface-raised border border-border-subtle rounded-lg p-4">
+              <p className="text-xs text-text-secondary mb-3">
+                Connect your Yapture v2 account for the latest sync features.
+              </p>
+              <button
+                onClick={handleV2Connect}
+                disabled={v2Connecting}
+                className="w-full px-4 py-2 text-sm font-medium text-white bg-accent hover:bg-accent-hover rounded-md transition-colors disabled:opacity-50"
+              >
+                {v2Connecting ? "Connecting..." : "Connect with Yapture"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Shared Settings ── */}
       <div className="border-t border-border-subtle pt-4">
@@ -651,6 +648,8 @@ function ExpansionSourcesTab() {
   const [prefixEdit, setPrefixEdit] = useState(":");
   const [editingSource, setEditingSource] = useState<SnippetSource | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [namePrompt, setNamePrompt] = useState<{ folder: string; defaultName: string } | null>(null);
+  const [nameInput, setNameInput] = useState("");
   const { showToast } = useToast();
 
   const refreshSources = useCallback(async () => {
@@ -682,8 +681,7 @@ function ExpansionSourcesTab() {
       if (!selected) return;
       const path = typeof selected === "string" ? selected : (selected as any);
       if (!path) return;
-      const name = window.prompt("Package name:", path.split("/").pop() || "snippets");
-      if (!name) return;
+      const name = path.split("/").pop() || "snippets";
       const isFolder = !path.endsWith(".yml") && !path.endsWith(".yaml");
       await addSnippetSource(name, path, isFolder);
       showToast("Source added and synced");
@@ -701,17 +699,29 @@ function ExpansionSourcesTab() {
       if (!folder) return;
       const path = typeof folder === "string" ? folder : (folder as any);
       if (!path) return;
-      const name = window.prompt("Package name:", path.split("/").pop() || "snippets");
-      if (!name) return;
-      const source = await createBoilerplateConfig(path, name);
-      showToast(`Created dispatch-snippets.yml in ${path}`);
+      const defaultName = path.split("/").pop() || "snippets";
+      setNameInput(defaultName);
+      setNamePrompt({ folder: path, defaultName });
+    } catch (err: any) {
+      console.error("Boilerplate failed:", err);
+      showToast(`Failed: ${err}`);
+    }
+  }, [showToast]);
+
+  const handleNameConfirm = useCallback(async () => {
+    if (!namePrompt || !nameInput.trim()) return;
+    try {
+      const source = await createBoilerplateConfig(namePrompt.folder, nameInput.trim());
+      showToast(`Created dispatch-snippets.yml in ${namePrompt.folder}`);
       refreshSources();
       setEditingSource(source);
     } catch (err: any) {
       console.error("Boilerplate failed:", err);
       showToast(`Failed: ${err}`);
+    } finally {
+      setNamePrompt(null);
     }
-  }, [showToast, refreshSources]);
+  }, [namePrompt, nameInput, showToast, refreshSources]);
 
   const handleSync = useCallback(async (id: string) => {
     try {
@@ -789,6 +799,43 @@ function ExpansionSourcesTab() {
 
   return (
     <div className="space-y-4">
+      {/* Name prompt modal */}
+      {namePrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-surface-raised border border-border-subtle rounded-lg p-4 w-72 shadow-xl">
+            <label className="block text-xs font-semibold text-text-secondary mb-2">
+              Package name
+            </label>
+            <input
+              type="text"
+              autoFocus
+              value={nameInput}
+              onChange={(e) => setNameInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleNameConfirm();
+                if (e.key === "Escape") setNamePrompt(null);
+              }}
+              className="w-full bg-surface-overlay border border-border-subtle rounded-md px-3 py-1.5 text-sm text-text-primary font-mono focus:outline-none focus:border-accent/50 transition-colors mb-3"
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setNamePrompt(null)}
+                className="text-xs text-text-tertiary hover:text-text-secondary transition-colors px-3 py-1"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleNameConfirm}
+                disabled={!nameInput.trim()}
+                className="text-xs text-accent hover:text-accent-hover transition-colors px-3 py-1 disabled:opacity-40"
+              >
+                Create
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Trigger Prefix */}
       <div>
         <label className="block text-xs font-semibold text-text-secondary mb-2">
@@ -1226,7 +1273,7 @@ export function YaptureSettings({ onBack, onHotkeyConfigChanged, onBannerConfigC
               : "text-text-tertiary border-transparent hover:text-text-secondary"
           }`}
         >
-          Yapture
+          Integrations
         </button>
         <button
           onClick={() => setActiveTab("hotkeys")}

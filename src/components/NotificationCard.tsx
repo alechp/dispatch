@@ -25,6 +25,17 @@ function timeAgo(dateStr: string): string {
   return `${days}d ago`;
 }
 
+function displayTitle(n: Notification): string {
+  if (n.tmux_window) {
+    const action = n.title.includes(" — ") ? n.title.split(" — ").slice(1).join(" — ") : n.title;
+    // Use project as pane name (more meaningful than numeric pane id)
+    const paneName = n.project || n.tmux_pane;
+    const location = paneName ? `${n.tmux_window} > ${paneName}` : n.tmux_window;
+    return `${location} : ${action}`;
+  }
+  return n.title;
+}
+
 function eventColor(eventType: string): string {
   switch (eventType) {
     case "error":
@@ -99,7 +110,7 @@ export function NotificationCard({
                   : "font-normal text-text-secondary"
               }`}
             >
-              {n.title}
+              {displayTitle(n)}
             </h3>
             <span className="text-[11px] text-text-tertiary whitespace-nowrap shrink-0">
               {timeAgo(n.created_at)}

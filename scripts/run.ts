@@ -7,6 +7,7 @@
 import { $ } from "bun";
 import { createInterface } from "readline";
 import { resolve, dirname } from "path";
+import { existsSync } from "fs";
 
 // ── ANSI Colors ──────────────────────────────────────────────────────────────
 
@@ -40,7 +41,17 @@ class DispatchRunner {
 
   constructor() {
     this.verbose = process.argv.includes("--verbose");
-    this.projectRoot = resolve(dirname(Bun.main), "..");
+    this.projectRoot = this.resolveProjectRoot();
+  }
+
+  private resolveProjectRoot() {
+    const scriptDir = dirname(Bun.main);
+    const siblingPackageJson = resolve(scriptDir, "package.json");
+    if (existsSync(siblingPackageJson)) {
+      return scriptDir;
+    }
+
+    return resolve(scriptDir, "..");
   }
 
   // ── Logging ──────────────────────────────────────────────────────────────
@@ -142,6 +153,27 @@ class DispatchRunner {
     return true;
   }
 
+  private async pathExists(path: string) {
+    return Bun.file(path).exists();
+  }
+
+  private async ensureJsDepsInstalled(context: string) {
+    const requiredPaths = [
+      resolve(this.projectRoot, "node_modules/@tauri-apps/cli/package.json"),
+      resolve(this.projectRoot, "node_modules/@socketsecurity/bun-security-scanner/package.json"),
+    ];
+
+    for (const path of requiredPaths) {
+      if (!(await this.pathExists(path))) {
+        this.logVerbose(`Missing dependency for ${context}: ${path}`);
+        return this.run("Installing JS dependencies", "bun install");
+      }
+    }
+
+    this.logVerbose(`JS dependencies OK for ${context}`);
+    return true;
+  }
+
   // ── Modes ────────────────────────────────────────────────────────────────
 
   private async modeRunEverything() {
@@ -154,22 +186,25 @@ class DispatchRunner {
 
   private async modeDev() {
     await this.validateEnv();
+    if (!(await this.ensureJsDepsInstalled("dev"))) return;
     await this.run("Starting Tauri dev (hot reload)", "bun run tauri dev");
   }
 
   private async modeBuild() {
     await this.validateEnv();
-    await this.run("Building production release", "bunx @tauri-apps/cli build --bundles app");
+    if (!(await this.ensureJsDepsInstalled("build"))) return;
+    await this.run("Building production release", "bun run tauri build --bundles app");
   }
 
   private async modeTest() {
     await this.validateEnv();
+    if (!(await this.ensureJsDepsInstalled("test"))) return;
 
     const cargo = await this.run(
       "Running Cargo tests",
       "cargo test --manifest-path src-tauri/Cargo.toml"
     );
-    const tsc = await this.run("TypeScript type check", "bunx tsc --noEmit");
+    const tsc = await this.run("TypeScript type check", "bun run tsc --noEmit");
 
     if (cargo && tsc) {
       this.logSuccess("All tests passed");
@@ -189,10 +224,11 @@ class DispatchRunner {
 
   private async modeInstall() {
     await this.validateEnv();
+    if (!(await this.ensureJsDepsInstalled("install"))) return;
     this.logStep("Building and installing Dispatch.app to /Applications");
 
     // Step 1: Build the release .app bundle (skip DMG to avoid intermittent failures)
-    if (!(await this.run("Building release bundle", "bunx @tauri-apps/cli build --bundles app"))) {
+    if (!(await this.run("Building release bundle", "bun run tauri build --bundles app"))) {
       this.logError("Build failed — cannot install");
       return;
     }

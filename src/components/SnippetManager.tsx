@@ -6,6 +6,7 @@ import {
   updateSnippet,
   deleteSnippet,
   toggleSnippetFavorite,
+  expandSnippet,
 } from "../lib/snippets";
 import {
   getLiveExpansionEnabled,
@@ -16,6 +17,7 @@ import {
   testTextInjection,
   copyToClipboard,
 } from "../lib/liveExpansion";
+import { FormView, parseVariables, hasFormVariables } from "./FormView";
 import type { ExpansionDiagnostics } from "../lib/liveExpansion";
 import type { Snippet, SnippetVariable } from "../lib/types";
 
@@ -38,15 +40,6 @@ const VARIABLE_TYPES: SnippetVariable["type"][] = [
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function parseVariables(json: string | null): SnippetVariable[] {
-  if (!json) return [];
-  try {
-    return JSON.parse(json) as SnippetVariable[];
-  } catch {
-    return [];
-  }
-}
 
 function parseTags(json: string | null): string[] {
   if (!json) return [];
@@ -307,11 +300,16 @@ function SnippetRow({
   const [isFav, setIsFav] = useState(snippet.is_favorite === 1);
   const { showToast } = useToast();
 
+  // Try-expand state
+  const [testResult, setTestResult] = useState<string | null>(null);
+  const [testError, setTestError] = useState<string | null>(null);
+  const [showForm, setShowForm] = useState(false);
+  const [formValues, setFormValues] = useState<Record<string, string>>({});
+
   const handleCopy = useCallback(
     async (e: React.MouseEvent) => {
       e.stopPropagation();
       try {
-        const { expandSnippet } = await import("../lib/snippets");
         const expanded = await expandSnippet(snippet.id);
         await copyToClipboard(expanded);
         setCopied(true);
@@ -338,7 +336,76 @@ function SnippetRow({
     [snippet.id, onRefresh]
   );
 
+  const handleTry = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      setTestResult(null);
+      setTestError(null);
+
+      const vars = parseVariables(snippet.variables);
+      if (hasFormVariables(vars)) {
+        // Build defaults and show inline form
+        const defaults: Record<string, string> = {};
+        for (const v of vars) {
+          if (v.type === "form") {
+            defaults[v.name] = (v.params.default as string) ?? "";
+          } else if (v.type === "choice") {
+            const values = (v.params.values as string[]) ?? [];
+            defaults[v.name] = values[0] ?? "";
+          }
+        }
+        setFormValues(defaults);
+        setShowForm(true);
+      } else {
+        // Expand immediately
+        try {
+          const expanded = await expandSnippet(snippet.id);
+          setTestResult(expanded);
+        } catch (err) {
+          setTestError(String(err));
+        }
+      }
+    },
+    [snippet.id, snippet.variables]
+  );
+
+  const handleFormExpand = useCallback(async () => {
+    try {
+      const expanded = await expandSnippet(snippet.id, formValues);
+      setTestResult(expanded);
+      setShowForm(false);
+    } catch (err) {
+      setTestError(String(err));
+      setShowForm(false);
+    }
+  }, [snippet.id, formValues]);
+
+  const handleFormCancel = useCallback(() => {
+    setShowForm(false);
+    setFormValues({});
+  }, []);
+
+  const handleCopyResult = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (!testResult) return;
+      await copyToClipboard(testResult);
+      showToast("Copied to clipboard");
+    },
+    [testResult, showToast]
+  );
+
+  const handleDismissResult = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setTestResult(null);
+    setTestError(null);
+  }, []);
+
   const isFromFile = snippet.source_type === "file";
+  const formVarsForForm = useMemo(() => {
+    const vars = parseVariables(snippet.variables);
+    return vars.filter((v) => v.type === "form" || v.type === "choice");
+  }, [snippet.variables]);
 
   return (
     <div className="relative group">
@@ -352,7 +419,7 @@ function SnippetRow({
             className={`text-xs shrink-0 transition-colors ${isFav ? "text-warning" : "text-text-tertiary/30 hover:text-text-tertiary"}`}
             title={isFav ? "Remove from favorites" : "Add to favorites"}
           >
-            {isFav ? "★" : "☆"}
+            {isFav ? "\u2605" : "\u2606"}
           </button>
           <span className="text-sm font-mono text-accent">{snippet.trigger}</span>
           {snippet.label && (
@@ -385,14 +452,82 @@ function SnippetRow({
           )}
         </div>
       </button>
-      {/* Copy button overlay */}
-      <button
-        onClick={handleCopy}
-        className="absolute top-3 right-3 p-1.5 rounded-md bg-surface-overlay border border-border-subtle text-text-tertiary hover:text-accent hover:border-accent/30 opacity-0 group-hover:opacity-100 transition-all"
-        title="Copy expanded snippet"
-      >
-        {copied ? <CheckIcon /> : <CopyIcon />}
-      </button>
+
+      {/* Try + Copy button overlays */}
+      <div className="absolute top-3 right-3 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+        <button
+          onClick={handleTry}
+          className="p-1.5 rounded-md bg-surface-overlay border border-border-subtle text-text-tertiary hover:text-accent hover:border-accent/30 transition-all"
+          title="Try snippet"
+        >
+          <PlayIcon />
+        </button>
+        <button
+          onClick={handleCopy}
+          className="p-1.5 rounded-md bg-surface-overlay border border-border-subtle text-text-tertiary hover:text-accent hover:border-accent/30 transition-all"
+          title="Copy expanded snippet"
+        >
+          {copied ? <CheckIcon /> : <CopyIcon />}
+        </button>
+      </div>
+
+      {/* Inline form for interactive variables */}
+      {showForm && (
+        <div
+          className="border-b border-border-subtle bg-surface-raised/50"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <FormView
+            variables={formVarsForForm}
+            values={formValues}
+            onValuesChange={setFormValues}
+            onExpand={handleFormExpand}
+            onCancel={handleFormCancel}
+          />
+        </div>
+      )}
+
+      {/* Inline test result */}
+      {testResult !== null && (
+        <div
+          className="border-l-2 border-success mx-4 my-2 px-3 py-2 bg-success/5 rounded-r-md"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <pre className="text-xs font-mono text-text-primary whitespace-pre-wrap break-words mb-2">
+            {testResult}
+          </pre>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleCopyResult}
+              className="text-[10px] text-accent hover:text-accent-hover transition-colors"
+            >
+              Copy
+            </button>
+            <button
+              onClick={handleDismissResult}
+              className="text-[10px] text-text-tertiary hover:text-text-primary transition-colors"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Inline test error */}
+      {testError !== null && (
+        <div
+          className="border-l-2 border-error mx-4 my-2 px-3 py-2 bg-error/5 rounded-r-md"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <p className="text-xs text-error break-words mb-2">{testError}</p>
+          <button
+            onClick={handleDismissResult}
+            className="text-[10px] text-text-tertiary hover:text-text-primary transition-colors"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1225,6 +1360,20 @@ function FieldLabel({ label, value }: { label: string; value: string }) {
 // ---------------------------------------------------------------------------
 // Icons
 // ---------------------------------------------------------------------------
+
+function PlayIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      stroke="none"
+    >
+      <polygon points="6 3 20 12 6 21 6 3" />
+    </svg>
+  );
+}
 
 function CopyIcon() {
   return (

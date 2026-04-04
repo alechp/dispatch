@@ -1,7 +1,9 @@
+use std::path::PathBuf;
+
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
-use crate::models::{CreateNotificationRequest, Notification, QueryParams};
+use crate::models::{CreateNotificationRequest, HotkeyConfig, Notification, QueryParams};
 
 pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::raw_sql(include_str!("../migrations/001_initial.sql"))
@@ -874,40 +876,86 @@ pub async fn get_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>,
     Ok(row.map(|r| r.0))
 }
 
-pub const DEFAULT_HOTKEY_CONFIG: &str = r#"{"bindings":[{"action":"toggle_window","keys":["CommandOrControl+Shift+E"],"enabled":true,"scope":"global","category":"Global","description":"Toggle window"},{"action":"show_command_palette","keys":["CommandOrControl+Shift+K"],"enabled":true,"scope":"global","category":"Global","description":"Command palette (global)"},{"action":"show_command_palette_local","keys":["CommandOrControl+K"],"enabled":true,"scope":"app","category":"Navigation","description":"Command palette"},{"action":"select_next","keys":["j","ArrowDown"],"enabled":true,"scope":"app","category":"Navigation","description":"Next notification"},{"action":"select_prev","keys":["k","ArrowUp"],"enabled":true,"scope":"app","category":"Navigation","description":"Previous notification"},{"action":"focus_search","keys":["f"],"enabled":true,"scope":"app","category":"Navigation","description":"Focus search"},{"action":"clear_selection","keys":["Escape"],"enabled":true,"scope":"app","category":"Navigation","description":"Clear selection"},{"action":"mark_selected_read","keys":["Enter","r"],"enabled":true,"scope":"app","category":"Actions","description":"Mark read"},{"action":"delete_selected","keys":["d","Backspace"],"enabled":true,"scope":"app","category":"Actions","description":"Delete"},{"action":"focus_terminal","keys":["t"],"enabled":true,"scope":"app","category":"Actions","description":"Focus terminal"},{"action":"mark_all_read","keys":["R"],"enabled":true,"scope":"app","category":"Actions","description":"Mark all read"},{"action":"clear_all","keys":["D"],"enabled":true,"scope":"app","category":"Actions","description":"Clear all"},{"action":"filter_all","keys":["1"],"enabled":true,"scope":"app","category":"Filters","description":"All"},{"action":"filter_unread","keys":["2"],"enabled":true,"scope":"app","category":"Filters","description":"Unread"},{"action":"filter_read","keys":["3"],"enabled":true,"scope":"app","category":"Filters","description":"Read"},{"action":"toggle_help","keys":["?"],"enabled":true,"scope":"app","category":"Help","description":"Toggle help"},{"action":"toggle_visual_mode","keys":["v"],"enabled":true,"scope":"app","category":"Visual","description":"Toggle visual mode"},{"action":"visual_toggle_item","keys":[" "],"enabled":true,"scope":"app","category":"Visual","description":"Toggle item selection"}]}"#;
+pub const DEFAULT_HOTKEY_CONFIG: &str = r#"{"bindings":[{"action":"toggle_window","keys":["CommandOrControl+Shift+D"],"enabled":true,"scope":"global","category":"Global","description":"Toggle window"},{"action":"show_command_palette","keys":["CommandOrControl+Shift+K"],"enabled":true,"scope":"global","category":"Global","description":"Command palette (global)"},{"action":"show_command_palette_local","keys":["CommandOrControl+K"],"enabled":true,"scope":"app","category":"Navigation","description":"Command palette"},{"action":"select_next","keys":["j","ArrowDown"],"enabled":true,"scope":"app","category":"Navigation","description":"Next notification"},{"action":"select_prev","keys":["k","ArrowUp"],"enabled":true,"scope":"app","category":"Navigation","description":"Previous notification"},{"action":"focus_search","keys":["f"],"enabled":true,"scope":"app","category":"Navigation","description":"Focus search"},{"action":"clear_selection","keys":["Escape"],"enabled":true,"scope":"app","category":"Navigation","description":"Clear selection"},{"action":"mark_selected_read","keys":["Enter","r"],"enabled":true,"scope":"app","category":"Actions","description":"Mark read"},{"action":"delete_selected","keys":["d","Backspace"],"enabled":true,"scope":"app","category":"Actions","description":"Delete"},{"action":"focus_terminal","keys":["t"],"enabled":true,"scope":"app","category":"Actions","description":"Focus terminal"},{"action":"mark_all_read","keys":["R"],"enabled":true,"scope":"app","category":"Actions","description":"Mark all read"},{"action":"clear_all","keys":["D"],"enabled":true,"scope":"app","category":"Actions","description":"Clear all"},{"action":"filter_all","keys":["1"],"enabled":true,"scope":"app","category":"Filters","description":"All"},{"action":"filter_unread","keys":["2"],"enabled":true,"scope":"app","category":"Filters","description":"Unread"},{"action":"filter_read","keys":["3"],"enabled":true,"scope":"app","category":"Filters","description":"Read"},{"action":"toggle_help","keys":["?"],"enabled":true,"scope":"app","category":"Help","description":"Toggle help"},{"action":"toggle_visual_mode","keys":["v"],"enabled":true,"scope":"app","category":"Visual","description":"Toggle visual mode"},{"action":"visual_toggle_item","keys":[" "],"enabled":true,"scope":"app","category":"Visual","description":"Toggle item selection"}]}"#;
 
-pub async fn get_hotkey_config(
-    pool: &SqlitePool,
-) -> Result<crate::models::HotkeyConfig, String> {
-    let defaults: crate::models::HotkeyConfig = serde_json::from_str(DEFAULT_HOTKEY_CONFIG)
-        .map_err(|e| format!("Bad default config: {}", e))?;
+/// Returns the path to `~/.config/dispatch/hotkeys.toml`.
+fn hotkeys_file_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".config").join("dispatch").join("hotkeys.toml"))
+}
 
-    let saved_json = get_setting(pool, "hotkey_config")
-        .await
-        .map_err(|e| e.to_string())?;
+/// Reads and parses hotkey config from the TOML file. Returns `None` on any failure.
+fn read_hotkeys_from_file() -> Option<HotkeyConfig> {
+    let path = hotkeys_file_path()?;
+    let contents = std::fs::read_to_string(&path).ok()?;
+    toml::from_str(&contents).ok()
+}
 
-    match saved_json {
-        None => Ok(defaults),
-        Some(json) => {
-            let mut config: crate::models::HotkeyConfig = serde_json::from_str(&json)
-                .map_err(|e| format!("Failed to parse hotkey config: {}", e))?;
-            // Add any actions from defaults that are missing in saved config
-            let existing: std::collections::HashSet<String> =
-                config.bindings.iter().map(|b| b.action.clone()).collect();
-            for binding in &defaults.bindings {
-                if !existing.contains(&binding.action) {
-                    config.bindings.push(binding.clone());
-                }
-            }
-            Ok(config)
+/// Serializes config to TOML and writes to `~/.config/dispatch/hotkeys.toml`.
+fn write_hotkeys_to_file(config: &HotkeyConfig) -> Result<(), String> {
+    let path = hotkeys_file_path().ok_or("Could not determine home directory")?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create config dir: {}", e))?;
+    }
+    let toml_str =
+        toml::to_string_pretty(config).map_err(|e| format!("Failed to serialize TOML: {}", e))?;
+    std::fs::write(&path, toml_str).map_err(|e| format!("Failed to write hotkeys file: {}", e))
+}
+
+/// Merges missing actions from `defaults` into `config`.
+fn merge_defaults(config: &mut HotkeyConfig, defaults: &HotkeyConfig) {
+    let existing: std::collections::HashSet<String> =
+        config.bindings.iter().map(|b| b.action.clone()).collect();
+    for binding in &defaults.bindings {
+        if !existing.contains(&binding.action) {
+            config.bindings.push(binding.clone());
         }
     }
 }
 
+pub async fn get_hotkey_config(
+    pool: &SqlitePool,
+) -> Result<HotkeyConfig, String> {
+    let defaults: HotkeyConfig = serde_json::from_str(DEFAULT_HOTKEY_CONFIG)
+        .map_err(|e| format!("Bad default config: {}", e))?;
+
+    // 1. Try TOML file first (source of truth)
+    if let Some(mut config) = read_hotkeys_from_file() {
+        merge_defaults(&mut config, &defaults);
+        return Ok(config);
+    }
+
+    // 2. Fall back to DB
+    let saved_json = get_setting(pool, "hotkey_config")
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let config = match saved_json {
+        Some(json) => {
+            let mut c: HotkeyConfig = serde_json::from_str(&json)
+                .map_err(|e| format!("Failed to parse hotkey config: {}", e))?;
+            merge_defaults(&mut c, &defaults);
+            c
+        }
+        None => defaults,
+    };
+
+    // 3. Persist to TOML file so it exists for next time
+    if let Err(e) = write_hotkeys_to_file(&config) {
+        eprintln!("Warning: could not write hotkeys file: {}", e);
+    }
+
+    Ok(config)
+}
+
 pub async fn set_hotkey_config(
     pool: &SqlitePool,
-    config: &crate::models::HotkeyConfig,
+    config: &HotkeyConfig,
 ) -> Result<(), String> {
+    // Write to TOML file (source of truth)
+    write_hotkeys_to_file(config)?;
+
+    // Also write to DB as cache
     let json = serde_json::to_string(config).map_err(|e| e.to_string())?;
     set_setting(pool, "hotkey_config", &json)
         .await
