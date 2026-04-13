@@ -18,11 +18,18 @@ pub struct AppState {
     pub yapture_v2_tokens: std::sync::Mutex<YaptureTokens>,     // v2
     /// Maps global shortcut string (e.g. "CommandOrControl+Shift+D") → action name
     pub global_shortcut_map: Arc<RwLock<HashMap<String, String>>>,
+    pub oauth_pending_integration: std::sync::Mutex<Option<PendingIntegrationOAuth>>,
 }
 
 pub struct PendingOAuth {
     pub version: String,  // "v1" or "v2"
     pub state: crate::yapture::OAuthState,
+}
+
+pub struct PendingIntegrationOAuth {
+    pub provider: String,  // "discord" or "slack"
+    pub state: String,     // Random state nonce
+    pub code_verifier: Option<String>,  // PKCE verifier (Discord uses it, Slack doesn't)
 }
 
 #[derive(Default)]
@@ -44,6 +51,7 @@ impl AppState {
             yapture_tokens: std::sync::Mutex::new(YaptureTokens::default()),
             yapture_v2_tokens: std::sync::Mutex::new(YaptureTokens::default()),
             global_shortcut_map: Arc::new(RwLock::new(HashMap::new())),
+            oauth_pending_integration: std::sync::Mutex::new(None),
         }
     }
 }

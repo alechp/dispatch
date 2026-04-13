@@ -16,6 +16,14 @@ pub struct Notification {
     pub created_at: String,
     pub read_at: Option<String>,
     pub yapture_task_id: Option<String>,
+    // Provider integration fields
+    pub account_id: Option<String>,
+    pub provider: Option<String>,
+    pub provider_message_id: Option<String>,
+    pub provider_channel_name: Option<String>,
+    pub provider_channel_id: Option<String>,
+    pub provider_avatar_url: Option<String>,
+    pub provider_author: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -177,4 +185,75 @@ pub struct HotkeyBinding {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HotkeyConfig {
     pub bindings: Vec<HotkeyBinding>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct NotificationAccount {
+    pub id: String,
+    pub provider: String,
+    pub account_label: String,
+    pub provider_user_id: Option<String>,
+    pub provider_username: Option<String>,
+    pub provider_avatar_url: Option<String>,
+    pub provider_team_id: Option<String>,
+    pub provider_team_name: Option<String>,
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    pub token_expires_at: Option<String>,
+    pub scopes: Option<String>,
+    pub is_enabled: i32,
+    pub sync_channels: Option<String>,
+    pub last_sync_at: Option<String>,
+    pub sync_cursor: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountScreenToggle {
+    pub account_id: String,
+    pub screen_key: String,
+    pub is_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct RoutingRule {
+    pub id: String,
+    pub name: String,
+    pub is_enabled: i32,
+    pub source_type: String,
+    pub source_value: Option<String>,
+    pub destination_type: String,
+    pub destination_config: String,
+    pub template: Option<String>,
+    pub filter_event_types: Option<String>,
+    pub filter_keywords: Option<String>,
+    pub priority: i32,
+    pub stop_on_match: i32,
+    pub chain_rule_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct RoutingLogEntry {
+    pub id: i64,
+    pub rule_id: String,
+    pub notification_id: String,
+    pub destination_type: String,
+    pub status: String,
+    pub error_message: Option<String>,
+    pub executed_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoutingDestinationConfig {
+    pub url: Option<String>,
+    pub method: Option<String>,
+    pub headers: Option<std::collections::HashMap<String, String>>,
+    pub account_id: Option<String>,
+    pub channel_id: Option<String>,
+    pub sound: Option<String>,
+    pub subtitle: Option<String>,
+    pub rule_id: Option<String>,
 }
