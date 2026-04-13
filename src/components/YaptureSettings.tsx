@@ -33,6 +33,10 @@ import {
   syncSnippetSource,
   updateSnippetSource,
   createBoilerplateConfig,
+  getEmojiPackStatus,
+  installEmojiPack,
+  updateEmojiPack,
+  uninstallEmojiPack,
   readSourceFile,
   writeSourceFile,
   refreshTriggers,
@@ -45,9 +49,10 @@ import {
 import { CodeEditor } from "./CodeEditor";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { copyToClipboard } from "../lib/liveExpansion";
+import { isEmojiPackSource } from "../lib/snippetDisplay";
 import { useToast } from "../hooks/useToast";
 import { HotkeySettings } from "./HotkeySettings";
-import type { NotificationBannerConfig, BannerScreenKey, SnippetSource } from "../lib/types";
+import type { BannerScreenKey, EmojiPackStatus, NotificationBannerConfig, SnippetSource } from "../lib/types";
 import { DEFAULT_BANNER_CONFIG, BANNER_SCREEN_LABELS } from "../lib/types";
 
 interface YaptureSettingsProps {
@@ -643,7 +648,11 @@ function NotificationSettingsTab({ onConfigChanged }: { onConfigChanged: () => v
 
 function ExpansionSourcesTab() {
   const [sources, setSources] = useState<SnippetSource[]>([]);
+  const [emojiPackStatus, setEmojiPackStatus] = useState<EmojiPackStatus | null>(null);
+  const [emojiPackSource, setEmojiPackSource] = useState<SnippetSource | null>(null);
   const [loading, setLoading] = useState(true);
+  const [emojiPackLoading, setEmojiPackLoading] = useState(true);
+  const [emojiPackBusy, setEmojiPackBusy] = useState<"install" | "update" | "remove" | "toggle" | null>(null);
   const [prefix, setPrefix] = useState(":");
   const [prefixEdit, setPrefixEdit] = useState(":");
   const [editingSource, setEditingSource] = useState<SnippetSource | null>(null);
@@ -656,17 +665,25 @@ function ExpansionSourcesTab() {
     try {
       // Ensure the built-in Defaults source exists before listing
       await ensureDefaultSource().catch(() => {});
-      const [srcs, pfx] = await Promise.all([
+      const [srcs, pfx, emoji] = await Promise.all([
         listSnippetSources(),
         getExpandPrefix(),
+        getEmojiPackStatus().catch(() => null),
       ]);
       setSources(srcs);
       setPrefix(pfx);
       setPrefixEdit(pfx);
+      setEmojiPackStatus(emoji);
+      setEmojiPackSource(
+        emoji?.source ??
+          srcs.find((source) => isEmojiPackSource(source)) ??
+          null
+      );
     } catch (err) {
       console.error("Failed to load sources:", err);
     } finally {
       setLoading(false);
+      setEmojiPackLoading(false);
     }
   }, []);
 
@@ -753,6 +770,66 @@ function ExpansionSourcesTab() {
     }
   }, [refreshSources]);
 
+  const handleEmojiPackInstall = useCallback(async () => {
+    setEmojiPackBusy("install");
+    try {
+      const result = await installEmojiPack();
+      showToast(`Installed Emoji Pack — +${result.added} ~${result.updated} -${result.removed}`);
+      await refreshSources();
+    } catch (err) {
+      console.error("Emoji pack install failed:", err);
+      showToast(`Failed to install Emoji Pack: ${err}`);
+    } finally {
+      setEmojiPackBusy(null);
+    }
+  }, [refreshSources, showToast]);
+
+  const handleEmojiPackUpdate = useCallback(async () => {
+    setEmojiPackBusy("update");
+    try {
+      const result = await updateEmojiPack();
+      showToast(`Updated Emoji Pack — +${result.added} ~${result.updated} -${result.removed}`);
+      await refreshSources();
+    } catch (err) {
+      console.error("Emoji pack update failed:", err);
+      showToast(`Failed to update Emoji Pack: ${err}`);
+    } finally {
+      setEmojiPackBusy(null);
+    }
+  }, [refreshSources, showToast]);
+
+  const handleEmojiPackRemove = useCallback(async () => {
+    setEmojiPackBusy("remove");
+    try {
+      await uninstallEmojiPack();
+      showToast("Removed Emoji Pack");
+      await refreshSources();
+    } catch (err) {
+      console.error("Emoji pack remove failed:", err);
+      showToast(`Failed to remove Emoji Pack: ${err}`);
+    } finally {
+      setEmojiPackBusy(null);
+    }
+  }, [refreshSources, showToast]);
+
+  const handleEmojiPackToggle = useCallback(async () => {
+    if (!emojiPackSource) return;
+    setEmojiPackBusy("toggle");
+    try {
+      await updateSnippetSource(emojiPackSource.id, {
+        isEnabled: emojiPackSource.is_enabled === 0,
+      });
+      await refreshTriggers();
+      showToast(emojiPackSource.is_enabled === 1 ? "Emoji Pack disabled" : "Emoji Pack enabled");
+      await refreshSources();
+    } catch (err) {
+      console.error("Emoji pack toggle failed:", err);
+      showToast(`Failed to update Emoji Pack: ${err}`);
+    } finally {
+      setEmojiPackBusy(null);
+    }
+  }, [emojiPackSource, refreshSources, showToast]);
+
   const handleSavePrefix = useCallback(async () => {
     try {
       await setExpandPrefixApi(prefixEdit);
@@ -799,6 +876,23 @@ function ExpansionSourcesTab() {
 
   return (
     <div className="space-y-4">
+      {/* Built-in Packs */}
+      <div>
+        <label className="block text-xs font-semibold text-text-secondary mb-2">
+          Built-in Packs
+        </label>
+        <EmojiPackCard
+          status={emojiPackStatus}
+          source={emojiPackSource}
+          loading={loading || emojiPackLoading}
+          busyAction={emojiPackBusy}
+          onInstall={handleEmojiPackInstall}
+          onUpdate={handleEmojiPackUpdate}
+          onRemove={handleEmojiPackRemove}
+          onToggle={handleEmojiPackToggle}
+        />
+      </div>
+
       {/* Name prompt modal */}
       {namePrompt && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -977,6 +1071,113 @@ function ExpansionSourcesTab() {
           onImport={handleImportSubmit}
         />
       )}
+    </div>
+  );
+}
+
+function EmojiPackCard({
+  status,
+  source,
+  loading,
+  busyAction,
+  onInstall,
+  onUpdate,
+  onRemove,
+  onToggle,
+}: {
+  status: EmojiPackStatus | null;
+  source: SnippetSource | null;
+  loading: boolean;
+  busyAction: "install" | "update" | "remove" | "toggle" | null;
+  onInstall: () => void;
+  onUpdate: () => void;
+  onRemove: () => void;
+  onToggle: () => void;
+}) {
+  const installed = status?.installed ?? !!source;
+  const enabled = source?.is_enabled === 1;
+  const itemCount = source?.item_count ?? status?.expected_count ?? null;
+  const version = source?.source_version ?? status?.version ?? "Latest";
+  const updatedAt = source?.last_synced_at ? new Date(source.last_synced_at).toLocaleString() : null;
+
+  return (
+    <div className="rounded-xl border border-accent/20 bg-gradient-to-br from-accent/10 via-surface-raised to-surface-raised p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-text-primary">Emoji Pack</span>
+            <span
+              className={`text-[10px] px-2 py-0.5 rounded-full border ${
+                installed
+                  ? enabled
+                    ? "border-success/30 text-success bg-success/10"
+                    : "border-warning/30 text-warning bg-warning/10"
+                  : "border-border-subtle text-text-tertiary bg-surface-overlay/60"
+              }`}
+            >
+              {installed ? (enabled ? "Installed" : "Disabled") : "Not installed"}
+            </span>
+          </div>
+          <p className="mt-1 text-xs text-text-secondary">
+            Type emojis with <code className="font-mono text-accent">:shortcodes:</code> and search by name, alias, or category.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2 text-[10px] text-text-tertiary">
+            <span className="inline-flex items-center rounded-md bg-surface-overlay/70 px-2 py-1">
+              Version: {version}
+            </span>
+            <span className="inline-flex items-center rounded-md bg-surface-overlay/70 px-2 py-1">
+              Count: {loading ? "Loading..." : itemCount ?? "Unknown"}
+            </span>
+            {updatedAt && (
+              <span className="inline-flex items-center rounded-md bg-surface-overlay/70 px-2 py-1">
+                Synced: {updatedAt}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="flex flex-col items-end gap-2 shrink-0">
+          {!installed ? (
+            <button
+              onClick={onInstall}
+              disabled={busyAction !== null}
+              className="px-3 py-1.5 text-xs font-medium text-white bg-accent hover:bg-accent-hover rounded-md transition-colors disabled:opacity-50"
+            >
+              {busyAction === "install" ? "Installing..." : "Install"}
+            </button>
+          ) : (
+            <>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={onUpdate}
+                  disabled={busyAction !== null}
+                  className="px-3 py-1.5 text-xs font-medium text-text-primary bg-surface-overlay border border-border-subtle rounded-md hover:border-accent/30 transition-colors disabled:opacity-50"
+                >
+                  {busyAction === "update" ? "Updating..." : "Update"}
+                </button>
+                <button
+                  onClick={onToggle}
+                  disabled={busyAction !== null}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md border transition-colors disabled:opacity-50 ${
+                    enabled
+                      ? "bg-success/10 text-success border-success/20 hover:border-success/30"
+                      : "bg-surface-overlay text-text-tertiary border-border-subtle hover:border-accent/30"
+                  }`}
+                >
+                  {busyAction === "toggle" ? "Saving..." : enabled ? "Disable" : "Enable"}
+                </button>
+              </div>
+              <button
+                onClick={onRemove}
+                disabled={busyAction !== null}
+                className="text-[11px] text-error hover:text-red-400 transition-colors disabled:opacity-50"
+              >
+                {busyAction === "remove" ? "Removing..." : "Remove pack"}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

@@ -32,7 +32,11 @@ pub fn parse_expansion_file(path: &Path) -> Result<ExpansionConfig, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
 
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
     match ext.as_str() {
         "toml" => {
             let config: ExpansionConfig = toml::from_str(&content)
@@ -56,12 +60,8 @@ pub fn validate_config_content(content: &str, path: &str) -> Result<ExpansionCon
         .unwrap_or("")
         .to_lowercase();
     match ext.as_str() {
-        "toml" => {
-            toml::from_str(content).map_err(|e| format!("Invalid TOML: {}", e))
-        }
-        _ => {
-            serde_yaml::from_str(content).map_err(|e| format!("Invalid YAML: {}", e))
-        }
+        "toml" => toml::from_str(content).map_err(|e| format!("Invalid TOML: {}", e)),
+        _ => serde_yaml::from_str(content).map_err(|e| format!("Invalid YAML: {}", e)),
     }
 }
 
@@ -83,7 +83,8 @@ pub fn parse_expansion_folder(path: &Path) -> Result<Vec<(String, ExpansionConfi
             if ext_str == "yml" || ext_str == "yaml" || ext_str == "toml" {
                 match parse_expansion_file(&file_path) {
                     Ok(config) => {
-                        let filename = file_path.file_name()
+                        let filename = file_path
+                            .file_name()
                             .map(|f| f.to_string_lossy().to_string())
                             .unwrap_or_default();
                         results.push((filename, config));
@@ -105,13 +106,16 @@ pub fn variables_to_json(vars: &[ParsedVariable]) -> Option<String> {
         return None;
     }
     // Convert to the format expected by the DB (matching VariableDef)
-    let json_vars: Vec<serde_json::Value> = vars.iter().map(|v| {
-        serde_json::json!({
-            "name": v.name,
-            "type": v.var_type,
-            "params": v.params,
+    let json_vars: Vec<serde_json::Value> = vars
+        .iter()
+        .map(|v| {
+            serde_json::json!({
+                "name": v.name,
+                "type": v.var_type,
+                "params": v.params,
+            })
         })
-    }).collect();
+        .collect();
     Some(serde_json::to_string(&json_vars).unwrap_or_else(|_| "[]".to_string()))
 }
 
@@ -134,34 +138,65 @@ mod tests {
     fn boilerplate_template_parses() {
         // Substitute placeholder so YAML is valid
         let yaml = BOILERPLATE_TEMPLATE.replace("{PACKAGE_NAME}", "test-package");
-        let config: ExpansionConfig = serde_yaml::from_str(&yaml)
-            .expect("Boilerplate template must parse as valid YAML");
+        let config: ExpansionConfig =
+            serde_yaml::from_str(&yaml).expect("Boilerplate template must parse as valid YAML");
 
-        assert!(config.snippets.len() >= 5, "Template should have at least 5 example snippets");
+        assert!(
+            config.snippets.len() >= 5,
+            "Template should have at least 5 example snippets"
+        );
         assert_eq!(config.name.as_deref(), Some("test-package"));
 
         // Verify each snippet has required fields
         for snippet in &config.snippets {
-            assert!(!snippet.trigger.is_empty(), "Trigger must not be empty: {:?}", snippet);
-            assert!(!snippet.body.is_empty(), "Body must not be empty: {:?}", snippet);
+            assert!(
+                !snippet.trigger.is_empty(),
+                "Trigger must not be empty: {:?}",
+                snippet
+            );
+            assert!(
+                !snippet.body.is_empty(),
+                "Body must not be empty: {:?}",
+                snippet
+            );
         }
 
         // Verify variable types are represented
-        let var_types: Vec<&str> = config.snippets.iter()
+        let var_types: Vec<&str> = config
+            .snippets
+            .iter()
             .flat_map(|s| s.variables.iter().map(|v| v.var_type.as_str()))
             .collect();
-        assert!(var_types.contains(&"date"), "Should have date variable example");
-        assert!(var_types.contains(&"shell"), "Should have shell variable example");
-        assert!(var_types.contains(&"form"), "Should have form variable example");
-        assert!(var_types.contains(&"choice"), "Should have choice variable example");
-        assert!(var_types.contains(&"clipboard"), "Should have clipboard variable example");
+        assert!(
+            var_types.contains(&"date"),
+            "Should have date variable example"
+        );
+        assert!(
+            var_types.contains(&"shell"),
+            "Should have shell variable example"
+        );
+        assert!(
+            var_types.contains(&"form"),
+            "Should have form variable example"
+        );
+        assert!(
+            var_types.contains(&"choice"),
+            "Should have choice variable example"
+        );
+        assert!(
+            var_types.contains(&"clipboard"),
+            "Should have clipboard variable example"
+        );
     }
 
     #[test]
     fn defaults_toml_template_parses() {
-        let config: ExpansionConfig = toml::from_str(DEFAULTS_TOML_TEMPLATE)
-            .expect("Defaults TOML template must parse");
-        assert!(config.snippets.len() >= 5, "TOML template should have at least 5 snippets");
+        let config: ExpansionConfig =
+            toml::from_str(DEFAULTS_TOML_TEMPLATE).expect("Defaults TOML template must parse");
+        assert!(
+            config.snippets.len() >= 5,
+            "TOML template should have at least 5 snippets"
+        );
         assert_eq!(config.name.as_deref(), Some("Defaults"));
 
         // Verify date snippet exists
@@ -171,17 +206,15 @@ mod tests {
 
     #[test]
     fn variables_to_json_round_trip() {
-        let vars = vec![
-            ParsedVariable {
-                name: "test".to_string(),
-                var_type: "echo".to_string(),
-                params: {
-                    let mut m = std::collections::HashMap::new();
-                    m.insert("value".to_string(), serde_json::json!("hello"));
-                    m
-                },
+        let vars = vec![ParsedVariable {
+            name: "test".to_string(),
+            var_type: "echo".to_string(),
+            params: {
+                let mut m = std::collections::HashMap::new();
+                m.insert("value".to_string(), serde_json::json!("hello"));
+                m
             },
-        ];
+        }];
         let json = variables_to_json(&vars).unwrap();
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.len(), 1);

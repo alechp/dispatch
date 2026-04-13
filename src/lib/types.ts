@@ -76,6 +76,10 @@ export interface SnippetSource {
   last_synced_at: string | null;
   created_at: string;
   updated_at: string;
+  source_kind?: string | null;
+  source_version?: string | null;
+  item_count?: number | null;
+  managed_key?: string | null;
 }
 
 export interface SyncResult {
@@ -83,6 +87,19 @@ export interface SyncResult {
   updated: number;
   removed: number;
   errors: string[];
+}
+
+export interface EmojiPackStatus {
+  managed_key: string;
+  name: string;
+  path: string;
+  version: string;
+  expected_count: number;
+  installed_count: number;
+  installed: boolean;
+  enabled: boolean;
+  file_exists: boolean;
+  source: SnippetSource | null;
 }
 
 export interface SnippetVariable {

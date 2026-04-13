@@ -127,6 +127,10 @@ pub struct SnippetSource {
     pub last_synced_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    pub source_kind: Option<String>,
+    pub source_version: Option<String>,
+    pub item_count: Option<i64>,
+    pub managed_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,6 +139,20 @@ pub struct SyncResult {
     pub updated: usize,
     pub removed: usize,
     pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmojiPackStatus {
+    pub managed_key: String,
+    pub name: String,
+    pub path: String,
+    pub version: String,
+    pub expected_count: i64,
+    pub installed_count: i64,
+    pub installed: bool,
+    pub enabled: bool,
+    pub file_exists: bool,
+    pub source: Option<SnippetSource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

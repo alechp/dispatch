@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { expandSnippet } from "../lib/snippets";
+import { expandSnippet, listFavoriteSnippets, listRecentSnippets, listSnippets } from "../lib/snippets";
+import { isEmojiSnippet, parseTags } from "../lib/snippetDisplay";
 import type { Snippet, SnippetVariable } from "../lib/types";
 
 interface CommandPaletteProps {
@@ -73,10 +73,7 @@ export function CommandPalette({
   // Fetch snippets when in expansion mode
   useEffect(() => {
     if (mode !== "expansions") return;
-    invoke<Snippet[]>("list_snippets", {
-      search: expansionQuery || null,
-      tag: null,
-    })
+    listSnippets(expansionQuery || undefined)
       .then(setSnippets)
       .catch((err) => console.error("Failed to fetch snippets:", err));
   }, [mode, expansionQuery]);
@@ -84,10 +81,10 @@ export function CommandPalette({
   // Fetch recents and favorites on expansion mode entry
   useEffect(() => {
     if (mode !== "expansions") return;
-    invoke<Snippet[]>("list_recent_snippets", { limit: 5 })
+    listRecentSnippets(5)
       .then(setRecentSnippets)
       .catch(() => setRecentSnippets([]));
-    invoke<Snippet[]>("list_favorite_snippets")
+    listFavoriteSnippets()
       .then(setFavoriteSnippets)
       .catch(() => setFavoriteSnippets([]));
   }, [mode]);
@@ -477,29 +474,71 @@ function SnippetRow({
   onClick: () => void;
   showFavorite?: boolean;
 }) {
+  const tags = parseTags(snippet.tags);
+  const emojiSnippet = isEmojiSnippet(snippet);
   return (
     <button
       data-palette-item
       onClick={onClick}
-      className={`w-full text-left px-4 py-2.5 flex items-center gap-2 transition-colors ${
+      className={`w-full text-left px-4 py-2.5 flex items-center gap-3 transition-colors ${
         selected ? "bg-surface-overlay" : "hover:bg-surface-overlay/50"
       }`}
     >
-      {showFavorite && (snippet as any).is_favorite === 1 && (
-        <span className="text-[10px] text-warning shrink-0">★</span>
-      )}
-      <span className="text-sm font-mono text-accent shrink-0">
-        {snippet.trigger}
-      </span>
-      {snippet.label && (
-        <span className="text-xs text-text-secondary truncate flex-1">
-          {snippet.label}
-        </span>
-      )}
-      {(snippet as any).source_name && (
-        <span className="text-[10px] text-text-tertiary bg-surface-overlay/50 px-1.5 py-0.5 rounded shrink-0">
-          {(snippet as any).source_name}
-        </span>
+      {emojiSnippet ? (
+        <>
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent/10 text-xl shrink-0">
+            {snippet.body}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 min-w-0">
+              {showFavorite && (snippet as any).is_favorite === 1 && (
+                <span className="text-[10px] text-warning shrink-0">★</span>
+              )}
+              <span className="text-sm font-mono text-accent shrink-0">
+                {snippet.trigger}
+              </span>
+              {snippet.label && (
+                <span className="text-xs text-text-primary truncate">
+                  {snippet.label}
+                </span>
+              )}
+            </div>
+            <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+              {tags.filter((tag) => tag !== "emoji").slice(0, 4).map((tag) => (
+                <span
+                  key={tag}
+                  className="text-[10px] text-text-tertiary bg-surface-overlay/50 px-1.5 py-0.5 rounded"
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
+          </div>
+          {(snippet as any).source_name && (
+            <span className="text-[10px] text-text-tertiary bg-surface-overlay/50 px-1.5 py-0.5 rounded shrink-0">
+              {(snippet as any).source_name}
+            </span>
+          )}
+        </>
+      ) : (
+        <>
+          {showFavorite && (snippet as any).is_favorite === 1 && (
+            <span className="text-[10px] text-warning shrink-0">★</span>
+          )}
+          <span className="text-sm font-mono text-accent shrink-0">
+            {snippet.trigger}
+          </span>
+          {snippet.label && (
+            <span className="text-xs text-text-secondary truncate flex-1">
+              {snippet.label}
+            </span>
+          )}
+          {(snippet as any).source_name && (
+            <span className="text-[10px] text-text-tertiary bg-surface-overlay/50 px-1.5 py-0.5 rounded shrink-0">
+              {(snippet as any).source_name}
+            </span>
+          )}
+        </>
       )}
     </button>
   );

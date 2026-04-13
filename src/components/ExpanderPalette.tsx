@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useSnippets } from "../hooks/useSnippets";
 import { expandSnippet } from "../lib/snippets";
+import { isEmojiSnippet, parseTags } from "../lib/snippetDisplay";
 import { FormView, parseVariables, hasFormVariables } from "./FormView";
 import type { SnippetVariable } from "../lib/types";
 
@@ -173,27 +174,66 @@ export function ExpanderPalette({ onClose, onExpand }: ExpanderPaletteProps) {
                 </p>
               </div>
             ) : (
-              snippets.map((snippet, i) => (
-                <button
-                  key={snippet.id}
-                  data-snippet-item
-                  onClick={() => handleSelect(i)}
-                  className={`w-full text-left px-4 py-2.5 flex items-center gap-2 transition-colors ${
-                    i === selectedIndex
-                      ? "bg-surface-overlay"
-                      : "hover:bg-surface-overlay/50"
-                  }`}
-                >
-                  <span className="text-sm font-mono text-accent shrink-0">
-                    {snippet.trigger}
-                  </span>
-                  {snippet.label && (
-                    <span className="text-xs text-text-secondary truncate">
-                      {snippet.label}
-                    </span>
-                  )}
-                </button>
-              ))
+              snippets.map((snippet, i) => {
+                const emojiSnippet = isEmojiSnippet(snippet);
+                const tags = parseTags(snippet.tags).filter((tag) => tag !== "emoji");
+
+                return (
+                  <button
+                    key={snippet.id}
+                    data-snippet-item
+                    onClick={() => handleSelect(i)}
+                    className={`w-full text-left px-4 py-2.5 flex items-center gap-3 transition-colors ${
+                      i === selectedIndex
+                        ? "bg-surface-overlay"
+                        : "hover:bg-surface-overlay/50"
+                    }`}
+                  >
+                    {emojiSnippet ? (
+                      <>
+                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent/10 text-xl shrink-0">
+                          {snippet.body}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-sm font-mono text-accent shrink-0">
+                              {snippet.trigger}
+                            </span>
+                            {snippet.label && (
+                              <span className="text-xs text-text-primary truncate">
+                                {snippet.label}
+                              </span>
+                            )}
+                          </div>
+                          {tags.length > 0 && (
+                            <div className="mt-0.5 flex flex-wrap gap-1.5">
+                              {tags.slice(0, 4).map((tag) => (
+                                <span
+                                  key={tag}
+                                  className="text-[10px] text-text-tertiary bg-surface-overlay/50 px-1.5 py-0.5 rounded"
+                                >
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-sm font-mono text-accent shrink-0">
+                          {snippet.trigger}
+                        </span>
+                        {snippet.label && (
+                          <span className="text-xs text-text-secondary truncate">
+                            {snippet.label}
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </button>
+                );
+              })
             )}
           </div>
         )}
@@ -201,4 +241,3 @@ export function ExpanderPalette({ onClose, onExpand }: ExpanderPaletteProps) {
     </div>
   );
 }
-

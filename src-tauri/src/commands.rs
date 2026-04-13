@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::db;
+use crate::emoji_pack;
 use crate::expander;
 use crate::macos_accessibility;
 use crate::models;
@@ -64,9 +65,7 @@ pub async fn mark_notification_read(
 }
 
 #[tauri::command]
-pub async fn mark_all_notifications_read(
-    state: State<'_, Arc<AppState>>,
-) -> Result<u64, String> {
+pub async fn mark_all_notifications_read(state: State<'_, Arc<AppState>>) -> Result<u64, String> {
     let _ = db::reset_all_session_unread(&state.db).await;
     db::mark_all_read(&state.db)
         .await
@@ -80,18 +79,31 @@ pub async fn delete_notification(
 ) -> Result<bool, String> {
     // Check sync setting + get yapture_task_id before deleting
     let sync_enabled = db::get_setting(&state.db, "yapture_bidirectional_sync")
-        .await.ok().flatten().unwrap_or_else(|| "true".into()) == "true";
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "true".into())
+        == "true";
 
     if sync_enabled {
         if let Ok(Some(n)) = db::get_notification_by_id(&state.db, &id).await {
             if let Some(yapture_id) = n.yapture_task_id {
                 if !yapture_id.is_empty() {
                     let db = state.db.clone();
-                    let token = state.yapture_tokens.lock().ok().and_then(|t| t.service_token.clone());
+                    let token = state
+                        .yapture_tokens
+                        .lock()
+                        .ok()
+                        .and_then(|t| t.service_token.clone());
                     tokio::spawn(async move {
                         if let Some(config) = yapture::load_config(&db, token).await {
-                            if let Err(e) = yapture::complete_yapture_task(&config, &yapture_id).await {
-                                crate::log::log(&format!("[yapture-sync] delete: failed to complete {}: {}", yapture_id, e));
+                            if let Err(e) =
+                                yapture::complete_yapture_task(&config, &yapture_id).await
+                            {
+                                crate::log::log(&format!(
+                                    "[yapture-sync] delete: failed to complete {}: {}",
+                                    yapture_id, e
+                                ));
                             }
                         }
                     });
@@ -106,26 +118,36 @@ pub async fn delete_notification(
 }
 
 #[tauri::command]
-pub async fn clear_all_notifications(
-    state: State<'_, Arc<AppState>>,
-) -> Result<u64, String> {
+pub async fn clear_all_notifications(state: State<'_, Arc<AppState>>) -> Result<u64, String> {
     // Sync all yapture tasks before clearing
     let sync_enabled = db::get_setting(&state.db, "yapture_bidirectional_sync")
-        .await.ok().flatten().unwrap_or_else(|| "true".into()) == "true";
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "true".into())
+        == "true";
 
     if sync_enabled {
         if let Ok(yapture_ids) = db::get_all_notification_yapture_ids(&state.db).await {
             if !yapture_ids.is_empty() {
                 let db = state.db.clone();
-                let token = state.yapture_tokens.lock().ok().and_then(|t| t.service_token.clone());
+                let token = state
+                    .yapture_tokens
+                    .lock()
+                    .ok()
+                    .and_then(|t| t.service_token.clone());
                 tokio::spawn(async move {
                     if let Some(config) = yapture::load_config(&db, token).await {
                         for yapture_id in yapture_ids {
                             let config = config.clone();
                             let yid = yapture_id.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = yapture::complete_yapture_task(&config, &yid).await {
-                                    crate::log::log(&format!("[yapture-sync] clear_all: failed {}: {}", yid, e));
+                                if let Err(e) = yapture::complete_yapture_task(&config, &yid).await
+                                {
+                                    crate::log::log(&format!(
+                                        "[yapture-sync] clear_all: failed {}: {}",
+                                        yid, e
+                                    ));
                                 }
                             });
                         }
@@ -141,9 +163,7 @@ pub async fn clear_all_notifications(
 }
 
 #[tauri::command]
-pub async fn get_unread_count(
-    state: State<'_, Arc<AppState>>,
-) -> Result<i64, String> {
+pub async fn get_unread_count(state: State<'_, Arc<AppState>>) -> Result<i64, String> {
     let params = QueryParams {
         source: None,
         project: None,
@@ -172,9 +192,7 @@ pub async fn do_focus_terminal(
         .await
         .ok()
         .flatten()
-        .unwrap_or_else(|| {
-            std::env::var("TERM_PROGRAM").unwrap_or_else(|_| "kitty".into())
-        });
+        .unwrap_or_else(|| std::env::var("TERM_PROGRAM").unwrap_or_else(|_| "kitty".into()));
 
     // Bring terminal to foreground
     std::process::Command::new("open")
@@ -223,17 +241,30 @@ pub async fn focus_terminal(
     // Sync to Yapture: complete the task when terminal is focused
     if let Some(nid) = notification_id {
         let sync_enabled = db::get_setting(&state.db, "yapture_bidirectional_sync")
-            .await.ok().flatten().unwrap_or_else(|| "true".into()) == "true";
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "true".into())
+            == "true";
         if sync_enabled {
             if let Ok(Some(n)) = db::get_notification_by_id(&state.db, &nid).await {
                 if let Some(yapture_id) = n.yapture_task_id {
                     if !yapture_id.is_empty() {
                         let db = state.db.clone();
-                        let token = state.yapture_tokens.lock().ok().and_then(|t| t.service_token.clone());
+                        let token = state
+                            .yapture_tokens
+                            .lock()
+                            .ok()
+                            .and_then(|t| t.service_token.clone());
                         tokio::spawn(async move {
                             if let Some(config) = yapture::load_config(&db, token).await {
-                                if let Err(e) = yapture::complete_yapture_task(&config, &yapture_id).await {
-                                    crate::log::log(&format!("[yapture-sync] focus_terminal: failed {}: {}", yapture_id, e));
+                                if let Err(e) =
+                                    yapture::complete_yapture_task(&config, &yapture_id).await
+                                {
+                                    crate::log::log(&format!(
+                                        "[yapture-sync] focus_terminal: failed {}: {}",
+                                        yapture_id, e
+                                    ));
                                 }
                             }
                         });
@@ -345,6 +376,163 @@ pub async fn list_snippets(
         .map_err(|e| e.to_string())
 }
 
+async fn emoji_pack_source_path() -> Result<std::path::PathBuf, String> {
+    let expansions_dir = dirs::home_dir()
+        .ok_or("Could not determine home directory")?
+        .join(".config/dispatch/expansions");
+    std::fs::create_dir_all(&expansions_dir)
+        .map_err(|e| format!("Failed to create expansions dir: {}", e))?;
+    Ok(emoji_pack::emoji_pack_path(&expansions_dir))
+}
+
+async fn ensure_emoji_pack_source(
+    pool: &sqlx::SqlitePool,
+) -> Result<models::SnippetSource, String> {
+    let path = emoji_pack_source_path().await?;
+    let path_str = path.to_string_lossy().to_string();
+    let source = if let Some(source) =
+        db::get_snippet_source_by_managed_key(pool, emoji_pack::EMOJI_PACK_MANAGED_KEY)
+            .await
+            .map_err(|e| e.to_string())?
+    {
+        if source.path != path_str {
+            if std::path::Path::new(&source.path).exists() {
+                let _ = std::fs::remove_file(&source.path);
+            }
+            sqlx::query("UPDATE snippet_sources SET name = ?, path = ?, updated_at = ? WHERE id = ?")
+                .bind(emoji_pack::EMOJI_PACK_NAME)
+                .bind(&path_str)
+                .bind(chrono::Utc::now().to_rfc3339())
+                .bind(&source.id)
+                .execute(pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        source
+    } else {
+        db::create_snippet_source(
+            pool,
+            emoji_pack::EMOJI_PACK_NAME,
+            &path_str,
+            false,
+        )
+        .await
+        .map_err(|e| e.to_string())?
+    };
+
+    let item_count = emoji_pack::emoji_pack_count()
+        .map_err(|e| format!("Failed to parse emoji pack template: {}", e))?
+        as i64;
+    db::set_snippet_source_metadata(
+        pool,
+        &source.id,
+        Some("emoji_pack"),
+        Some(emoji_pack::EMOJI_PACK_VERSION),
+        Some(item_count),
+        Some(emoji_pack::EMOJI_PACK_MANAGED_KEY),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    db::get_snippet_source(pool, &source.id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Emoji pack source disappeared after creation".to_string())
+}
+
+#[tauri::command]
+pub async fn get_emoji_pack_status(
+    state: State<'_, Arc<AppState>>,
+) -> Result<models::EmojiPackStatus, String> {
+    let source =
+        db::get_snippet_source_by_managed_key(&state.db, emoji_pack::EMOJI_PACK_MANAGED_KEY)
+            .await
+            .map_err(|e| e.to_string())?;
+    let path = emoji_pack_source_path().await?;
+    let expected_count = emoji_pack::emoji_pack_count()
+        .map_err(|e| format!("Failed to parse emoji pack template: {}", e))?
+        as i64;
+
+    let installed_count = if let Some(ref source) = source {
+        db::count_snippets_for_source(&state.db, &source.id)
+            .await
+            .map_err(|e| e.to_string())?
+    } else {
+        0
+    };
+    let path_str = source
+        .as_ref()
+        .map(|s| s.path.clone())
+        .unwrap_or_else(|| path.to_string_lossy().to_string());
+    let enabled = source.as_ref().map(|s| s.is_enabled == 1).unwrap_or(false);
+    let file_exists = source
+        .as_ref()
+        .map(|s| std::path::Path::new(&s.path).exists())
+        .unwrap_or_else(|| path.exists());
+    let installed = source.is_some();
+
+    Ok(models::EmojiPackStatus {
+        managed_key: emoji_pack::EMOJI_PACK_MANAGED_KEY.to_string(),
+        name: emoji_pack::EMOJI_PACK_NAME.to_string(),
+        path: path_str,
+        version: emoji_pack::EMOJI_PACK_VERSION.to_string(),
+        expected_count,
+        installed_count,
+        installed,
+        enabled,
+        file_exists,
+        source,
+    })
+}
+
+#[tauri::command]
+pub async fn install_emoji_pack(
+    state: State<'_, Arc<AppState>>,
+) -> Result<models::SyncResult, String> {
+    let source = ensure_emoji_pack_source(&state.db).await?;
+    emoji_pack::write_emoji_pack_file(std::path::Path::new(&source.path))?;
+
+    let result = sync_source_internal(&state.db, &source).await?;
+    let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn update_emoji_pack(
+    state: State<'_, Arc<AppState>>,
+) -> Result<models::SyncResult, String> {
+    let source = ensure_emoji_pack_source(&state.db).await?;
+    emoji_pack::write_emoji_pack_file(std::path::Path::new(&source.path))?;
+
+    let result = sync_source_internal(&state.db, &source).await?;
+    let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn uninstall_emoji_pack(state: State<'_, Arc<AppState>>) -> Result<bool, String> {
+    if let Some(source) =
+        db::get_snippet_source_by_managed_key(&state.db, emoji_pack::EMOJI_PACK_MANAGED_KEY)
+            .await
+            .map_err(|e| e.to_string())?
+    {
+        if std::path::Path::new(&source.path).exists() {
+            let _ = std::fs::remove_file(&source.path);
+        }
+        let removed = db::delete_snippet_source(&state.db, &source.id)
+            .await
+            .map_err(|e| e.to_string())?;
+        let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
+        Ok(removed)
+    } else {
+        let path = emoji_pack_source_path().await?;
+        if path.exists() {
+            let _ = std::fs::remove_file(&path);
+        }
+        Ok(false)
+    }
+}
+
 #[tauri::command]
 pub async fn create_snippet(
     state: State<'_, Arc<AppState>>,
@@ -354,9 +542,16 @@ pub async fn create_snippet(
     tags: Option<String>,
     variables: Option<String>,
 ) -> Result<models::Snippet, String> {
-    let result = db::create_snippet(&state.db, &trigger, label.as_deref(), &body, tags.as_deref(), variables.as_deref())
-        .await
-        .map_err(|e| e.to_string())?;
+    let result = db::create_snippet(
+        &state.db,
+        &trigger,
+        label.as_deref(),
+        &body,
+        tags.as_deref(),
+        variables.as_deref(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
     Ok(result)
 }
@@ -372,18 +567,24 @@ pub async fn update_snippet(
     variables: Option<String>,
     is_enabled: Option<i32>,
 ) -> Result<models::Snippet, String> {
-    let result = db::update_snippet(&state.db, &id, trigger.as_deref(), label.as_deref(), body.as_deref(), tags.as_deref(), variables.as_deref(), is_enabled)
-        .await
-        .map_err(|e| e.to_string())?;
+    let result = db::update_snippet(
+        &state.db,
+        &id,
+        trigger.as_deref(),
+        label.as_deref(),
+        body.as_deref(),
+        tags.as_deref(),
+        variables.as_deref(),
+        is_enabled,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
     Ok(result)
 }
 
 #[tauri::command]
-pub async fn delete_snippet(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-) -> Result<bool, String> {
+pub async fn delete_snippet(state: State<'_, Arc<AppState>>, id: String) -> Result<bool, String> {
     let result = db::delete_snippet(&state.db, &id)
         .await
         .map_err(|e| e.to_string())?;
@@ -407,13 +608,16 @@ pub async fn expand_snippet(
     // Increment use count (fire-and-forget)
     let pool = state.db.clone();
     let sid = id.clone();
-    tokio::spawn(async move { let _ = db::increment_snippet_use(&pool, &sid).await; });
+    tokio::spawn(async move {
+        let _ = db::increment_snippet_use(&pool, &sid).await;
+    });
 
     // Record telemetry
     let tpool = state.db.clone();
     let tid = id.clone();
     tokio::spawn(async move {
-        let _ = db::record_telemetry(&tpool, "snippet_expanded", Some(&tid), None, None, None).await;
+        let _ =
+            db::record_telemetry(&tpool, "snippet_expanded", Some(&tid), None, None, None).await;
     });
 
     Ok(expanded)
@@ -424,8 +628,8 @@ pub async fn import_snippets(
     state: State<'_, Arc<AppState>>,
     snippets_json: String,
 ) -> Result<u64, String> {
-    let items: Vec<serde_json::Value> = serde_json::from_str(&snippets_json)
-        .map_err(|e| e.to_string())?;
+    let items: Vec<serde_json::Value> =
+        serde_json::from_str(&snippets_json).map_err(|e| e.to_string())?;
 
     let mut count: u64 = 0;
     for item in &items {
@@ -436,7 +640,15 @@ pub async fn import_snippets(
         let variables = item.get("variables").map(|v| v.to_string());
 
         if !trigger.is_empty() && !body.is_empty() {
-            let _ = db::create_snippet(&state.db, trigger, label, body, tags.as_deref(), variables.as_deref()).await;
+            let _ = db::create_snippet(
+                &state.db,
+                trigger,
+                label,
+                body,
+                tags.as_deref(),
+                variables.as_deref(),
+            )
+            .await;
             count += 1;
         }
     }
@@ -456,9 +668,7 @@ pub async fn export_snippets(
 // --- Live Expansion commands ---
 
 #[tauri::command]
-pub async fn get_live_expansion_enabled(
-    state: State<'_, Arc<AppState>>,
-) -> Result<bool, String> {
+pub async fn get_live_expansion_enabled(state: State<'_, Arc<AppState>>) -> Result<bool, String> {
     Ok(state.live_expansion_enabled.load(Ordering::Relaxed))
 }
 
@@ -569,8 +779,15 @@ pub async fn get_yapture_config(
         .await
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
-    let has_token = state.yapture_tokens.lock()
-        .map(|t| t.access_token.as_ref().map(|s| !s.is_empty()).unwrap_or(false))
+    let has_token = state
+        .yapture_tokens
+        .lock()
+        .map(|t| {
+            t.access_token
+                .as_ref()
+                .map(|s| !s.is_empty())
+                .unwrap_or(false)
+        })
         .unwrap_or(false);
 
     Ok(yapture::YaptureConfigResponse {
@@ -612,14 +829,14 @@ pub async fn set_yapture_config(
 }
 
 #[tauri::command]
-pub async fn test_yapture_connection(
-    state: State<'_, Arc<AppState>>,
-) -> Result<bool, String> {
+pub async fn test_yapture_connection(state: State<'_, Arc<AppState>>) -> Result<bool, String> {
     let api_url = db::get_setting(&state.db, "yapture_api_url")
         .await
         .map_err(|e| e.to_string())?
         .unwrap_or_else(|| "https://api.yapture.app".to_string());
-    let access_token = state.yapture_tokens.lock()
+    let access_token = state
+        .yapture_tokens
+        .lock()
         .map(|t| t.access_token.clone().unwrap_or_default())
         .unwrap_or_default();
     Ok(yapture::test_connection(&api_url, &access_token).await)
@@ -628,9 +845,7 @@ pub async fn test_yapture_connection(
 // --- OAuth commands ---
 
 #[tauri::command]
-pub async fn yapture_start_oauth(
-    state: State<'_, Arc<AppState>>,
-) -> Result<String, String> {
+pub async fn yapture_start_oauth(state: State<'_, Arc<AppState>>) -> Result<String, String> {
     let api_url = db::get_setting(&state.db, "yapture_api_url")
         .await
         .map_err(|e| e.to_string())?
@@ -651,15 +866,15 @@ pub async fn yapture_start_oauth(
 /// Refresh the Yapture access token using the stored refresh token.
 /// Returns true if refresh succeeded, false if no refresh token or refresh failed.
 #[tauri::command]
-pub async fn yapture_refresh(
-    state: State<'_, Arc<AppState>>,
-) -> Result<bool, String> {
+pub async fn yapture_refresh(state: State<'_, Arc<AppState>>) -> Result<bool, String> {
     let api_url = db::get_setting(&state.db, "yapture_api_url")
         .await
         .map_err(|e| e.to_string())?
         .unwrap_or_else(|| "https://api.yapture.app".to_string());
 
-    let refresh_token = state.yapture_tokens.lock()
+    let refresh_token = state
+        .yapture_tokens
+        .lock()
         .map(|t| t.refresh_token.clone())
         .unwrap_or(None);
 
@@ -697,9 +912,7 @@ pub async fn yapture_refresh(
 }
 
 #[tauri::command]
-pub async fn yapture_detect_version(
-    state: State<'_, Arc<AppState>>,
-) -> Result<String, String> {
+pub async fn yapture_detect_version(state: State<'_, Arc<AppState>>) -> Result<String, String> {
     let api_url = crate::db::get_setting(&state.db, "yapture_api_url")
         .await
         .map_err(|e| e.to_string())?
@@ -715,9 +928,7 @@ pub async fn yapture_detect_version(
 }
 
 #[tauri::command]
-pub async fn yapture_disconnect(
-    state: State<'_, Arc<AppState>>,
-) -> Result<(), String> {
+pub async fn yapture_disconnect(state: State<'_, Arc<AppState>>) -> Result<(), String> {
     db::set_setting(&state.db, "yapture_enabled", "0")
         .await
         .map_err(|e| e.to_string())?;
@@ -774,9 +985,7 @@ pub async fn get_yapture_connection_status(
 // --- Yapture V2 commands ---
 
 #[tauri::command]
-pub async fn yapture_v2_start_oauth(
-    state: State<'_, Arc<AppState>>,
-) -> Result<String, String> {
+pub async fn yapture_v2_start_oauth(state: State<'_, Arc<AppState>>) -> Result<String, String> {
     let auth_url = db::get_setting(&state.db, "yapture_v2_auth_url")
         .await
         .map_err(|e| e.to_string())?
@@ -794,15 +1003,19 @@ pub async fn yapture_v2_start_oauth(
 }
 
 #[tauri::command]
-pub async fn yapture_v2_disconnect(
-    state: State<'_, Arc<AppState>>,
-) -> Result<(), String> {
+pub async fn yapture_v2_disconnect(state: State<'_, Arc<AppState>>) -> Result<(), String> {
     let keys = [
-        "yapture_v2_enabled", "yapture_v2_user_id", "yapture_v2_user_name",
-        "yapture_v2_user_email", "yapture_v2_access_token", "yapture_v2_refresh_token",
+        "yapture_v2_enabled",
+        "yapture_v2_user_id",
+        "yapture_v2_user_name",
+        "yapture_v2_user_email",
+        "yapture_v2_access_token",
+        "yapture_v2_refresh_token",
     ];
     for key in &keys {
-        db::set_setting(&state.db, key, "").await.map_err(|e| e.to_string())?;
+        db::set_setting(&state.db, key, "")
+            .await
+            .map_err(|e| e.to_string())?;
     }
     if let Ok(mut tokens) = state.yapture_v2_tokens.lock() {
         *tokens = crate::state::YaptureTokens::default();
@@ -814,18 +1027,32 @@ pub async fn yapture_v2_disconnect(
 pub async fn get_yapture_v2_status(
     state: State<'_, Arc<AppState>>,
 ) -> Result<serde_json::Value, String> {
-    let enabled = db::get_setting(&state.db, "yapture_v2_enabled").await
-        .map_err(|e| e.to_string())?.unwrap_or_default() == "1";
-    let user_name = db::get_setting(&state.db, "yapture_v2_user_name").await
-        .map_err(|e| e.to_string())?.unwrap_or_default();
-    let user_email = db::get_setting(&state.db, "yapture_v2_user_email").await
-        .map_err(|e| e.to_string())?.unwrap_or_default();
-    let api_url = db::get_setting(&state.db, "yapture_v2_api_url").await
-        .map_err(|e| e.to_string())?.unwrap_or_default();
-    let auth_url = db::get_setting(&state.db, "yapture_v2_auth_url").await
-        .map_err(|e| e.to_string())?.unwrap_or_default();
-    let has_token = state.yapture_v2_tokens.lock()
-        .map(|t| t.access_token.is_some()).unwrap_or(false);
+    let enabled = db::get_setting(&state.db, "yapture_v2_enabled")
+        .await
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default()
+        == "1";
+    let user_name = db::get_setting(&state.db, "yapture_v2_user_name")
+        .await
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let user_email = db::get_setting(&state.db, "yapture_v2_user_email")
+        .await
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let api_url = db::get_setting(&state.db, "yapture_v2_api_url")
+        .await
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let auth_url = db::get_setting(&state.db, "yapture_v2_auth_url")
+        .await
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let has_token = state
+        .yapture_v2_tokens
+        .lock()
+        .map(|t| t.access_token.is_some())
+        .unwrap_or(false);
 
     Ok(serde_json::json!({
         "connected": has_token && !user_name.is_empty(),
@@ -845,21 +1072,25 @@ pub async fn set_yapture_v2_config(
     enabled: Option<bool>,
 ) -> Result<(), String> {
     if let Some(url) = api_url {
-        db::set_setting(&state.db, "yapture_v2_api_url", &url).await.map_err(|e| e.to_string())?;
+        db::set_setting(&state.db, "yapture_v2_api_url", &url)
+            .await
+            .map_err(|e| e.to_string())?;
     }
     if let Some(url) = auth_url {
-        db::set_setting(&state.db, "yapture_v2_auth_url", &url).await.map_err(|e| e.to_string())?;
+        db::set_setting(&state.db, "yapture_v2_auth_url", &url)
+            .await
+            .map_err(|e| e.to_string())?;
     }
     if let Some(en) = enabled {
-        db::set_setting(&state.db, "yapture_v2_enabled", if en { "1" } else { "0" }).await.map_err(|e| e.to_string())?;
+        db::set_setting(&state.db, "yapture_v2_enabled", if en { "1" } else { "0" })
+            .await
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
 
 #[tauri::command]
-pub async fn test_yapture_v2_connection(
-    state: State<'_, Arc<AppState>>,
-) -> Result<bool, String> {
+pub async fn test_yapture_v2_connection(state: State<'_, Arc<AppState>>) -> Result<bool, String> {
     let auth_url = db::get_setting(&state.db, "yapture_v2_auth_url")
         .await
         .map_err(|e| e.to_string())?
@@ -877,11 +1108,10 @@ pub async fn test_yapture_v2_connection(
 pub async fn get_expansion_diagnostics(
     state: State<'_, Arc<AppState>>,
 ) -> Result<ExpansionDiagnostics, String> {
-    let has_accessibility = tokio::task::spawn_blocking(|| {
-        macos_accessibility::check_permissions_robust()
-    })
-    .await
-    .unwrap_or(false);
+    let has_accessibility =
+        tokio::task::spawn_blocking(|| macos_accessibility::check_permissions_robust())
+            .await
+            .unwrap_or(false);
 
     #[cfg(target_os = "macos")]
     let listener_active = crate::macos_listener::is_monitoring();
@@ -918,9 +1148,13 @@ pub struct ExpansionDiagnostics {
 #[tauri::command]
 pub async fn open_privacy_settings(pane: String) -> Result<(), String> {
     let url = match pane.as_str() {
-        "Accessibility" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+        "Accessibility" => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        }
         // Keep ListenEvent for backward compatibility, but redirect to Accessibility
-        "ListenEvent" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+        "ListenEvent" => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        }
         _ => return Err(format!("Unknown pane: {}", pane)),
     };
 
@@ -936,8 +1170,11 @@ pub async fn open_privacy_settings(pane: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn copy_to_clipboard(text: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        let mut clipboard = arboard::Clipboard::new().map_err(|e| format!("Clipboard init failed: {}", e))?;
-        clipboard.set_text(&text).map_err(|e| format!("Clipboard set failed: {}", e))
+        let mut clipboard =
+            arboard::Clipboard::new().map_err(|e| format!("Clipboard init failed: {}", e))?;
+        clipboard
+            .set_text(&text)
+            .map_err(|e| format!("Clipboard set failed: {}", e))
     })
     .await
     .map_err(|e| format!("spawn_blocking failed: {}", e))?
@@ -964,17 +1201,15 @@ pub async fn set_notification_banner_config(
     config_json: String,
 ) -> Result<(), String> {
     // Validate that it's valid JSON
-    let _: serde_json::Value = serde_json::from_str(&config_json)
-        .map_err(|e| format!("Invalid JSON: {}", e))?;
+    let _: serde_json::Value =
+        serde_json::from_str(&config_json).map_err(|e| format!("Invalid JSON: {}", e))?;
     db::set_setting(&state.db, "notification_banner_config", &config_json)
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn get_yapture_sync_enabled(
-    state: State<'_, Arc<AppState>>,
-) -> Result<bool, String> {
+pub async fn get_yapture_sync_enabled(state: State<'_, Arc<AppState>>) -> Result<bool, String> {
     let val = db::get_setting(&state.db, "yapture_bidirectional_sync")
         .await
         .map_err(|e| e.to_string())?
@@ -987,9 +1222,13 @@ pub async fn set_yapture_sync_enabled(
     state: State<'_, Arc<AppState>>,
     enabled: bool,
 ) -> Result<(), String> {
-    db::set_setting(&state.db, "yapture_bidirectional_sync", if enabled { "true" } else { "false" })
-        .await
-        .map_err(|e| e.to_string())
+    db::set_setting(
+        &state.db,
+        "yapture_bidirectional_sync",
+        if enabled { "true" } else { "false" },
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 // --- Expander V2 commands: recents, favorites, prefix, sources ---
@@ -1024,9 +1263,7 @@ pub async fn toggle_snippet_favorite(
 }
 
 #[tauri::command]
-pub async fn get_expand_prefix(
-    state: State<'_, Arc<AppState>>,
-) -> Result<String, String> {
+pub async fn get_expand_prefix(state: State<'_, Arc<AppState>>) -> Result<String, String> {
     db::get_expand_prefix(&state.db).await
 }
 
@@ -1120,9 +1357,16 @@ pub async fn sync_all_sources(
     let sources = db::list_snippet_sources(&state.db)
         .await
         .map_err(|e| e.to_string())?;
-    let mut total = models::SyncResult { added: 0, updated: 0, removed: 0, errors: vec![] };
+    let mut total = models::SyncResult {
+        added: 0,
+        updated: 0,
+        removed: 0,
+        errors: vec![],
+    };
     for source in &sources {
-        if source.is_enabled == 0 { continue; }
+        if source.is_enabled == 0 {
+            continue;
+        }
         match sync_source_internal(&state.db, source).await {
             Ok(r) => {
                 total.added += r.added;
@@ -1144,7 +1388,12 @@ async fn sync_source_internal(
 ) -> Result<models::SyncResult, String> {
     use crate::file_parser;
 
-    let mut result = models::SyncResult { added: 0, updated: 0, removed: 0, errors: vec![] };
+    let mut result = models::SyncResult {
+        added: 0,
+        updated: 0,
+        removed: 0,
+        errors: vec![],
+    };
     let path = std::path::Path::new(&source.path);
 
     let configs = if source.is_folder == 1 {
@@ -1158,30 +1407,39 @@ async fn sync_source_internal(
 
     for (_filename, config) in &configs {
         for snippet in &config.snippets {
-            active_triggers.push(snippet.trigger.clone());
             let tags = file_parser::tags_to_json(&snippet.tags);
             let vars = file_parser::variables_to_json(&snippet.variables);
-
-            // Check if it already exists to count adds vs updates
-            let existing: Option<(String,)> = sqlx::query_as(
-                "SELECT id FROM snippets WHERE source_id = ? AND trigger = ?"
+            match db::upsert_source_snippet(
+                pool,
+                &source.id,
+                &snippet.trigger,
+                snippet.label.as_deref(),
+                &snippet.body,
+                tags.as_deref(),
+                vars.as_deref(),
             )
-            .bind(&source.id).bind(&snippet.trigger)
-            .fetch_optional(pool).await.map_err(|e| e.to_string())?;
-
-            if existing.is_some() {
-                result.updated += 1;
-            } else {
-                result.added += 1;
+            .await
+            {
+                Ok(db::SnippetUpsertOutcome::Inserted) => {
+                    active_triggers.push(snippet.trigger.clone());
+                    result.added += 1;
+                }
+                Ok(db::SnippetUpsertOutcome::Updated) => {
+                    active_triggers.push(snippet.trigger.clone());
+                    result.updated += 1;
+                }
+                Ok(db::SnippetUpsertOutcome::SkippedConflict) => {
+                    eprintln!(
+                        "[snippet-sync] skipped conflicting trigger from source {}: {}",
+                        source.id, snippet.trigger
+                    );
+                }
+                Err(e) => {
+                    result
+                        .errors
+                        .push(format!("Failed to upsert {}: {}", snippet.trigger, e));
+                }
             }
-
-            db::upsert_source_snippet(
-                pool, &source.id, &snippet.trigger, snippet.label.as_deref(),
-                &snippet.body, tags.as_deref(), vars.as_deref(),
-            ).await.map_err(|e| {
-                result.errors.push(format!("Failed to upsert {}: {}", snippet.trigger, e));
-                e.to_string()
-            }).ok();
         }
     }
 
@@ -1212,13 +1470,14 @@ pub async fn create_boilerplate_config(
 
     let file_path = dir.join("dispatch-snippets.yml");
     if file_path.exists() {
-        return Err("dispatch-snippets.yml already exists in this folder. Import it instead.".to_string());
+        return Err(
+            "dispatch-snippets.yml already exists in this folder. Import it instead.".to_string(),
+        );
     }
 
     let template = BOILERPLATE_TEMPLATE.replace("{PACKAGE_NAME}", &package_name);
 
-    std::fs::write(&file_path, &template)
-        .map_err(|e| format!("Failed to write file: {}", e))?;
+    std::fs::write(&file_path, &template).map_err(|e| format!("Failed to write file: {}", e))?;
 
     let source = db::create_snippet_source(
         &state.db,
@@ -1273,7 +1532,10 @@ pub async fn ensure_default_source(
     let sources = db::list_snippet_sources(&state.db)
         .await
         .map_err(|e| e.to_string())?;
-    for s in sources.iter().filter(|s| s.path == old_yml_str || s.path == old_toml_str) {
+    for s in sources
+        .iter()
+        .filter(|s| s.path == old_yml_str || s.path == old_toml_str)
+    {
         let _ = db::delete_snippet_source(&state.db, &s.id).await;
     }
 
@@ -1319,8 +1581,7 @@ pub async fn get_expansions_directory() -> Result<String, String> {
     let dir = dirs::home_dir()
         .ok_or("Could not determine home directory")?
         .join(".config/dispatch/expansions");
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("Failed to create expansions dir: {}", e))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create expansions dir: {}", e))?;
     Ok(dir.to_string_lossy().to_string())
 }
 
@@ -1332,9 +1593,7 @@ pub async fn refresh_triggers(state: State<'_, Arc<AppState>>) -> Result<(), Str
 }
 
 #[tauri::command]
-pub async fn get_trigger_cache_count(
-    state: State<'_, Arc<AppState>>,
-) -> Result<usize, String> {
+pub async fn get_trigger_cache_count(state: State<'_, Arc<AppState>>) -> Result<usize, String> {
     Ok(state.trigger_cache.read().len())
 }
 

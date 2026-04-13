@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Snippet } from "./types";
+import type { EmojiPackStatus, Snippet, SnippetSource, SyncResult } from "./types";
 
 export async function listSnippets(search?: string, tag?: string, sourceId?: string): Promise<Snippet[]> {
   return invoke("list_snippets", { search: search ?? null, tag: tag ?? null, sourceId: sourceId ?? null });
@@ -133,4 +133,20 @@ export async function writeSourceFile(sourceId: string, content: string): Promis
   return invoke<SyncResult>("write_source_file", { sourceId, content });
 }
 
-import type { SnippetSource, SyncResult } from "./types";
+// --- Emoji Pack ---
+
+export async function getEmojiPackStatus(): Promise<EmojiPackStatus> {
+  return invoke<EmojiPackStatus>("get_emoji_pack_status");
+}
+
+export async function installEmojiPack(): Promise<SyncResult> {
+  return invoke<SyncResult>("install_emoji_pack");
+}
+
+export async function updateEmojiPack(): Promise<SyncResult> {
+  return invoke<SyncResult>("update_emoji_pack");
+}
+
+export async function uninstallEmojiPack(): Promise<void> {
+  return invoke("uninstall_emoji_pack");
+}

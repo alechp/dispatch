@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod emoji_pack;
 mod expander;
 mod file_parser;
 mod live_listener;
@@ -11,8 +12,8 @@ mod models;
 mod server;
 mod state;
 mod text_injector;
-mod trigger_cache;
 mod tray;
+mod trigger_cache;
 mod yapture;
 
 use std::sync::atomic::Ordering;
@@ -744,6 +745,10 @@ pub fn run() {
             commands::toggle_snippet_favorite,
             commands::get_expand_prefix,
             commands::set_expand_prefix,
+            commands::get_emoji_pack_status,
+            commands::install_emoji_pack,
+            commands::update_emoji_pack,
+            commands::uninstall_emoji_pack,
             commands::add_snippet_source,
             commands::list_snippet_sources,
             commands::update_snippet_source,

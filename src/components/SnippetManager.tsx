@@ -7,6 +7,12 @@ import {
   deleteSnippet,
   toggleSnippetFavorite,
   expandSnippet,
+  getEmojiPackStatus,
+  installEmojiPack,
+  uninstallEmojiPack,
+  updateEmojiPack,
+  updateSnippetSource,
+  refreshTriggers,
 } from "../lib/snippets";
 import {
   getLiveExpansionEnabled,
@@ -18,8 +24,9 @@ import {
   copyToClipboard,
 } from "../lib/liveExpansion";
 import { FormView, parseVariables, hasFormVariables } from "./FormView";
+import { isEmojiSnippet } from "../lib/snippetDisplay";
 import type { ExpansionDiagnostics } from "../lib/liveExpansion";
-import type { Snippet, SnippetVariable } from "../lib/types";
+import type { EmojiPackStatus, Snippet, SnippetVariable } from "../lib/types";
 
 interface SnippetManagerProps {
   onBack: () => void;
@@ -195,6 +202,10 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
       {/* Live Expansion Toggle */}
       <div className="shrink-0"><LiveExpansionToggle /></div>
 
+      <div className="shrink-0">
+        <EmojiPackCard onChanged={refresh} />
+      </div>
+
       {/* Source filter chip */}
       {sourceFilter && (
         <div className="flex items-center justify-between px-4 py-2 bg-accent/5 border-b border-border-subtle shrink-0">
@@ -282,6 +293,158 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
   );
 }
 
+function EmojiPackCard({ onChanged }: { onChanged: () => Promise<void> | void }) {
+  const [status, setStatus] = useState<EmojiPackStatus | null>(null);
+  const [busy, setBusy] = useState<"install" | "update" | "remove" | "toggle" | null>(null);
+  const { showToast } = useToast();
+
+  const refreshStatus = useCallback(async () => {
+    try {
+      const next = await getEmojiPackStatus();
+      setStatus(next);
+    } catch (err) {
+      console.error("Failed to load emoji pack status:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshStatus();
+  }, [refreshStatus]);
+
+  const handleInstall = useCallback(async () => {
+    setBusy("install");
+    try {
+      const result = await installEmojiPack();
+      showToast(`Installed Emoji Pack — +${result.added} ~${result.updated} -${result.removed}`);
+      await refreshStatus();
+      await onChanged();
+    } catch (err) {
+      console.error("Emoji pack install failed:", err);
+      showToast(`Failed to install Emoji Pack: ${err}`);
+    } finally {
+      setBusy(null);
+    }
+  }, [onChanged, refreshStatus, showToast]);
+
+  const handleUpdate = useCallback(async () => {
+    setBusy("update");
+    try {
+      const result = await updateEmojiPack();
+      showToast(`Updated Emoji Pack — +${result.added} ~${result.updated} -${result.removed}`);
+      await refreshStatus();
+      await onChanged();
+    } catch (err) {
+      console.error("Emoji pack update failed:", err);
+      showToast(`Failed to update Emoji Pack: ${err}`);
+    } finally {
+      setBusy(null);
+    }
+  }, [onChanged, refreshStatus, showToast]);
+
+  const handleRemove = useCallback(async () => {
+    setBusy("remove");
+    try {
+      await uninstallEmojiPack();
+      showToast("Removed Emoji Pack");
+      await refreshStatus();
+      await onChanged();
+    } catch (err) {
+      console.error("Emoji pack remove failed:", err);
+      showToast(`Failed to remove Emoji Pack: ${err}`);
+    } finally {
+      setBusy(null);
+    }
+  }, [onChanged, refreshStatus, showToast]);
+
+  const handleToggle = useCallback(async () => {
+    if (!status?.source) return;
+    setBusy("toggle");
+    try {
+      await updateSnippetSource(status.source.id, {
+        isEnabled: status.source.is_enabled === 0,
+      });
+      await refreshTriggers();
+      showToast(status.source.is_enabled === 1 ? "Emoji Pack disabled" : "Emoji Pack enabled");
+      await refreshStatus();
+      await onChanged();
+    } catch (err) {
+      console.error("Emoji pack toggle failed:", err);
+      showToast(`Failed to update Emoji Pack: ${err}`);
+    } finally {
+      setBusy(null);
+    }
+  }, [onChanged, refreshStatus, showToast, status]);
+
+  const installed = status?.installed ?? false;
+  const enabled = status?.source?.is_enabled === 1;
+  const count = status?.source?.item_count ?? status?.expected_count ?? null;
+  const version = status?.source?.source_version ?? status?.version ?? "Latest";
+
+  return (
+    <div className="px-4 py-3 border-b border-border-subtle bg-accent/5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-text-primary">Emoji Pack</span>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${
+              installed
+                ? enabled
+                  ? "border-success/30 text-success bg-success/10"
+                  : "border-warning/30 text-warning bg-warning/10"
+                : "border-border-subtle text-text-tertiary bg-surface-overlay/60"
+            }`}>
+              {installed ? (enabled ? "Installed" : "Disabled") : "Not installed"}
+            </span>
+          </div>
+          <p className="mt-1 text-[11px] text-text-secondary">
+            Type emojis with <code className="font-mono text-accent">:shortcodes:</code> directly from Text Expander.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-text-tertiary">
+            <span>Version: {version}</span>
+            <span>Count: {count ?? "..."}</span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          {!installed ? (
+            <button
+              onClick={handleInstall}
+              disabled={busy !== null}
+              className="text-[11px] text-white bg-accent hover:bg-accent-hover transition-colors px-2.5 py-1 rounded-md disabled:opacity-50"
+            >
+              {busy === "install" ? "Installing..." : "Install"}
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={handleUpdate}
+                disabled={busy !== null}
+                className="text-[11px] text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50"
+              >
+                {busy === "update" ? "Updating..." : "Update"}
+              </button>
+              <button
+                onClick={handleToggle}
+                disabled={busy !== null}
+                className="text-[11px] text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50"
+              >
+                {busy === "toggle" ? "Saving..." : enabled ? "Disable" : "Enable"}
+              </button>
+              <button
+                onClick={handleRemove}
+                disabled={busy !== null}
+                className="text-[11px] text-error hover:text-red-400 transition-colors disabled:opacity-50"
+              >
+                {busy === "remove" ? "Removing..." : "Remove"}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // SnippetRow
 // ---------------------------------------------------------------------------
@@ -296,6 +459,7 @@ function SnippetRow({
   onRefresh?: () => void;
 }) {
   const tags = parseTags(snippet.tags);
+  const emojiSnippet = isEmojiSnippet(snippet);
   const [copied, setCopied] = useState(false);
   const [isFav, setIsFav] = useState(snippet.is_favorite === 1);
   const { showToast } = useToast();
@@ -413,41 +577,85 @@ function SnippetRow({
         onClick={onClick}
         className="w-full text-left px-4 py-3 border-b border-border-subtle hover:bg-surface-raised transition-colors"
       >
-        <div className="flex items-center gap-2 mb-1">
-          <button
-            onClick={handleToggleFav}
-            className={`text-xs shrink-0 transition-colors ${isFav ? "text-warning" : "text-text-tertiary/30 hover:text-text-tertiary"}`}
-            title={isFav ? "Remove from favorites" : "Add to favorites"}
-          >
-            {isFav ? "\u2605" : "\u2606"}
-          </button>
-          <span className="text-sm font-mono text-accent">{snippet.trigger}</span>
-          {snippet.label && (
-            <span className="text-xs text-text-secondary truncate">
-              {snippet.label}
-            </span>
-          )}
-        </div>
-        <p className="text-xs font-mono text-text-tertiary line-clamp-2 mb-1">
-          {snippet.body}
-        </p>
-        <div className="flex items-center gap-2">
+        {emojiSnippet ? (
+          <div className="flex items-start gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-accent/10 text-xl shrink-0">
+              {snippet.body}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 mb-1 min-w-0">
+                <button
+                  onClick={handleToggleFav}
+                  className={`text-xs shrink-0 transition-colors ${isFav ? "text-warning" : "text-text-tertiary/30 hover:text-text-tertiary"}`}
+                  title={isFav ? "Remove from favorites" : "Add to favorites"}
+                >
+                  {isFav ? "\u2605" : "\u2606"}
+                </button>
+                <span className="text-sm font-mono text-accent">{snippet.trigger}</span>
+                {snippet.label && (
+                  <span className="text-xs text-text-primary truncate">
+                    {snippet.label}
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {tags.filter((tag) => tag !== "emoji").slice(0, 4).map((tag) => (
+                  <span
+                    key={tag}
+                    className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-surface-overlay text-text-tertiary"
+                  >
+                    {tag}
+                  </span>
+                ))}
+                {snippet.use_count > 0 && (
+                  <span className="text-[10px] text-text-tertiary ml-auto">
+                    used {snippet.use_count}x
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="flex items-center gap-2 mb-1">
+              <button
+                onClick={handleToggleFav}
+                className={`text-xs shrink-0 transition-colors ${isFav ? "text-warning" : "text-text-tertiary/30 hover:text-text-tertiary"}`}
+                title={isFav ? "Remove from favorites" : "Add to favorites"}
+              >
+                {isFav ? "\u2605" : "\u2606"}
+              </button>
+              <span className="text-sm font-mono text-accent">{snippet.trigger}</span>
+              {snippet.label && (
+                <span className="text-xs text-text-secondary truncate">
+                  {snippet.label}
+                </span>
+              )}
+            </div>
+            <p className="text-xs font-mono text-text-tertiary line-clamp-2 mb-1">
+              {snippet.body}
+            </p>
+            <div className="flex items-center gap-2">
+              {tags.map((tag) => (
+                <span
+                  key={tag}
+                  className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-surface-overlay text-text-tertiary"
+                >
+                  {tag}
+                </span>
+              ))}
+              {snippet.use_count > 0 && (
+                <span className="text-[10px] text-text-tertiary ml-auto">
+                  used {snippet.use_count}x
+                </span>
+              )}
+            </div>
+          </>
+        )}
+        <div className="flex items-center gap-2 mt-1">
           {isFromFile && (
             <span className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-accent/10 text-accent">
               file
-            </span>
-          )}
-          {tags.map((tag) => (
-            <span
-              key={tag}
-              className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-surface-overlay text-text-tertiary"
-            >
-              {tag}
-            </span>
-          ))}
-          {snippet.use_count > 0 && (
-            <span className="text-[10px] text-text-tertiary ml-auto">
-              used {snippet.use_count}x
             </span>
           )}
         </div>
@@ -1427,4 +1635,3 @@ function ChevronLeftIcon() {
     </svg>
   );
 }
-
