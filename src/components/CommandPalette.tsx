@@ -3,6 +3,11 @@ import { expandSnippet, listFavoriteSnippets, listRecentSnippets, listSnippets }
 import { isEmojiSnippet, parseTags } from "../lib/snippetDisplay";
 import type { Snippet, SnippetVariable } from "../lib/types";
 
+function isEmojiOrKaomoji(snippet: { tags: string | null }): boolean {
+  const tags = parseTags(snippet.tags);
+  return tags.includes("emoji") || tags.includes("kaomoji");
+}
+
 interface CommandPaletteProps {
   onClose: () => void;
   onAction: (action: string) => void;
@@ -106,6 +111,14 @@ export function CommandPalette({
     [formVariables]
   );
 
+  // Colon-prefix emoji boost: filter to emoji/kaomoji only when expansionQuery starts with ":"
+  const filteredSnippets = useMemo(() => {
+    if (expansionQuery.startsWith(":")) {
+      return snippets.filter(isEmojiOrKaomoji);
+    }
+    return snippets;
+  }, [snippets, expansionQuery]);
+
   // Command mode filtering
   const filteredCommands = search
     ? COMMANDS.filter((c) =>
@@ -116,7 +129,7 @@ export function CommandPalette({
   // Build sectioned list for expansion mode (empty query)
   const expansionItems = useMemo(() => {
     if (mode !== "expansions") return [];
-    if (expansionQuery) return snippets;
+    if (expansionQuery) return filteredSnippets;
 
     // Deduplicate: favorites first, then recents (excluding favorites), then all (excluding both)
     const favIds = new Set(favoriteSnippets.map((s) => s.id));
@@ -136,16 +149,16 @@ export function CommandPalette({
     }
 
     return sections;
-  }, [mode, expansionQuery, snippets, recentSnippets, favoriteSnippets]);
+  }, [mode, expansionQuery, filteredSnippets, snippets, recentSnippets, favoriteSnippets]);
 
   // Flat list for keyboard navigation in expansion mode (empty query with sections)
   const flatExpansionItems = useMemo(() => {
-    if (expansionQuery) return snippets;
+    if (expansionQuery) return filteredSnippets;
     if (!Array.isArray(expansionItems)) return [];
     return (expansionItems as { header: string; items: Snippet[] }[]).flatMap(
       (s) => s.items
     );
-  }, [expansionQuery, expansionItems, snippets]);
+  }, [expansionQuery, expansionItems, filteredSnippets]);
 
   const totalItems =
     mode === "commands" ? filteredCommands.length : flatExpansionItems.length;
@@ -391,14 +404,14 @@ export function CommandPalette({
           <div ref={listRef} className="max-h-[300px] overflow-y-auto">
             {expansionQuery ? (
               // Flat search results
-              snippets.length === 0 ? (
+              filteredSnippets.length === 0 ? (
                 <div className="px-4 py-6 text-center">
                   <p className="text-xs text-text-tertiary">
                     No matching snippets.
                   </p>
                 </div>
               ) : (
-                snippets.map((snippet, i) => (
+                filteredSnippets.map((snippet, i) => (
                   <SnippetRow
                     key={snippet.id}
                     snippet={snippet}

@@ -3,6 +3,8 @@ mod db;
 mod emoji_pack;
 mod expander;
 mod file_parser;
+mod file_watcher;
+mod kaomoji_pack;
 mod live_listener;
 mod log;
 mod macos_accessibility;
@@ -65,7 +67,7 @@ pub fn run() {
                 db::init_db(&pool).await.expect("Failed to run migrations");
                 dlog!("setup: migrations complete");
 
-                let state = Arc::new(AppState::new(pool));
+                let state = Arc::new(AppState::new(pool.clone()));
 
                 // Load persisted live expansion setting
                 if let Ok(Some(val)) = db::get_setting(&state.db, "live_expansion_enabled").await {
@@ -105,6 +107,13 @@ pub fn run() {
                         dlog!("setup: yapture v2 tokens loaded from DB");
                     }
                 }
+
+                // Start file watcher for auto-sync
+                let _file_watcher_handle = file_watcher::start_file_watcher(
+                    pool.clone(),
+                    state.trigger_cache.clone(),
+                );
+                dlog!("setup: file watcher started");
 
                 dlog!("setup: state initialized, trigger cache loaded");
 
@@ -749,6 +758,10 @@ pub fn run() {
             commands::install_emoji_pack,
             commands::update_emoji_pack,
             commands::uninstall_emoji_pack,
+            commands::get_kaomoji_pack_status,
+            commands::install_kaomoji_pack,
+            commands::update_kaomoji_pack,
+            commands::uninstall_kaomoji_pack,
             commands::add_snippet_source,
             commands::list_snippet_sources,
             commands::update_snippet_source,

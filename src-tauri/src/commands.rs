@@ -6,6 +6,7 @@ use tauri::State;
 
 use crate::db;
 use crate::emoji_pack;
+use crate::kaomoji_pack;
 use crate::expander;
 use crate::macos_accessibility;
 use crate::models;
@@ -526,6 +527,167 @@ pub async fn uninstall_emoji_pack(state: State<'_, Arc<AppState>>) -> Result<boo
         Ok(removed)
     } else {
         let path = emoji_pack_source_path().await?;
+        if path.exists() {
+            let _ = std::fs::remove_file(&path);
+        }
+        Ok(false)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Kaomoji Pack commands
+// ---------------------------------------------------------------------------
+
+async fn kaomoji_pack_source_path() -> Result<std::path::PathBuf, String> {
+    let expansions_dir = dirs::home_dir()
+        .ok_or("Could not determine home directory")?
+        .join(".config/dispatch/expansions");
+    std::fs::create_dir_all(&expansions_dir)
+        .map_err(|e| format!("Failed to create expansions dir: {}", e))?;
+    Ok(kaomoji_pack::kaomoji_pack_path(&expansions_dir))
+}
+
+async fn ensure_kaomoji_pack_source(
+    pool: &sqlx::SqlitePool,
+) -> Result<models::SnippetSource, String> {
+    let path = kaomoji_pack_source_path().await?;
+    let path_str = path.to_string_lossy().to_string();
+    let source = if let Some(source) =
+        db::get_snippet_source_by_managed_key(pool, kaomoji_pack::KAOMOJI_PACK_MANAGED_KEY)
+            .await
+            .map_err(|e| e.to_string())?
+    {
+        if source.path != path_str {
+            if std::path::Path::new(&source.path).exists() {
+                let _ = std::fs::remove_file(&source.path);
+            }
+            sqlx::query("UPDATE snippet_sources SET name = ?, path = ?, updated_at = ? WHERE id = ?")
+                .bind(kaomoji_pack::KAOMOJI_PACK_NAME)
+                .bind(&path_str)
+                .bind(chrono::Utc::now().to_rfc3339())
+                .bind(&source.id)
+                .execute(pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        source
+    } else {
+        db::create_snippet_source(
+            pool,
+            kaomoji_pack::KAOMOJI_PACK_NAME,
+            &path_str,
+            false,
+        )
+        .await
+        .map_err(|e| e.to_string())?
+    };
+
+    let item_count = kaomoji_pack::kaomoji_pack_count()
+        .map_err(|e| format!("Failed to parse kaomoji pack template: {}", e))?
+        as i64;
+    db::set_snippet_source_metadata(
+        pool,
+        &source.id,
+        Some("kaomoji_pack"),
+        Some(kaomoji_pack::KAOMOJI_PACK_VERSION),
+        Some(item_count),
+        Some(kaomoji_pack::KAOMOJI_PACK_MANAGED_KEY),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    db::get_snippet_source(pool, &source.id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Kaomoji pack source disappeared after creation".to_string())
+}
+
+#[tauri::command]
+pub async fn get_kaomoji_pack_status(
+    state: State<'_, Arc<AppState>>,
+) -> Result<models::EmojiPackStatus, String> {
+    let source =
+        db::get_snippet_source_by_managed_key(&state.db, kaomoji_pack::KAOMOJI_PACK_MANAGED_KEY)
+            .await
+            .map_err(|e| e.to_string())?;
+    let path = kaomoji_pack_source_path().await?;
+    let expected_count = kaomoji_pack::kaomoji_pack_count()
+        .map_err(|e| format!("Failed to parse kaomoji pack template: {}", e))?
+        as i64;
+
+    let installed_count = if let Some(ref source) = source {
+        db::count_snippets_for_source(&state.db, &source.id)
+            .await
+            .map_err(|e| e.to_string())?
+    } else {
+        0
+    };
+    let path_str = source
+        .as_ref()
+        .map(|s| s.path.clone())
+        .unwrap_or_else(|| path.to_string_lossy().to_string());
+    let enabled = source.as_ref().map(|s| s.is_enabled == 1).unwrap_or(false);
+    let file_exists = source
+        .as_ref()
+        .map(|s| std::path::Path::new(&s.path).exists())
+        .unwrap_or_else(|| path.exists());
+    let installed = source.is_some();
+
+    Ok(models::EmojiPackStatus {
+        managed_key: kaomoji_pack::KAOMOJI_PACK_MANAGED_KEY.to_string(),
+        name: kaomoji_pack::KAOMOJI_PACK_NAME.to_string(),
+        path: path_str,
+        version: kaomoji_pack::KAOMOJI_PACK_VERSION.to_string(),
+        expected_count,
+        installed_count,
+        installed,
+        enabled,
+        file_exists,
+        source,
+    })
+}
+
+#[tauri::command]
+pub async fn install_kaomoji_pack(
+    state: State<'_, Arc<AppState>>,
+) -> Result<models::SyncResult, String> {
+    let source = ensure_kaomoji_pack_source(&state.db).await?;
+    kaomoji_pack::write_kaomoji_pack_file(std::path::Path::new(&source.path))?;
+
+    let result = sync_source_internal(&state.db, &source).await?;
+    let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn update_kaomoji_pack(
+    state: State<'_, Arc<AppState>>,
+) -> Result<models::SyncResult, String> {
+    let source = ensure_kaomoji_pack_source(&state.db).await?;
+    kaomoji_pack::write_kaomoji_pack_file(std::path::Path::new(&source.path))?;
+
+    let result = sync_source_internal(&state.db, &source).await?;
+    let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn uninstall_kaomoji_pack(state: State<'_, Arc<AppState>>) -> Result<bool, String> {
+    if let Some(source) =
+        db::get_snippet_source_by_managed_key(&state.db, kaomoji_pack::KAOMOJI_PACK_MANAGED_KEY)
+            .await
+            .map_err(|e| e.to_string())?
+    {
+        if std::path::Path::new(&source.path).exists() {
+            let _ = std::fs::remove_file(&source.path);
+        }
+        let removed = db::delete_snippet_source(&state.db, &source.id)
+            .await
+            .map_err(|e| e.to_string())?;
+        let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
+        Ok(removed)
+    } else {
+        let path = kaomoji_pack_source_path().await?;
         if path.exists() {
             let _ = std::fs::remove_file(&path);
         }

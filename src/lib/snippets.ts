@@ -150,3 +150,21 @@ export async function updateEmojiPack(): Promise<SyncResult> {
 export async function uninstallEmojiPack(): Promise<void> {
   return invoke("uninstall_emoji_pack");
 }
+
+// --- Kaomoji Pack ---
+
+export async function getKaomojiPackStatus(): Promise<EmojiPackStatus> {
+  return invoke<EmojiPackStatus>("get_kaomoji_pack_status");
+}
+
+export async function installKaomojiPack(): Promise<SyncResult> {
+  return invoke<SyncResult>("install_kaomoji_pack");
+}
+
+export async function updateKaomojiPack(): Promise<SyncResult> {
+  return invoke<SyncResult>("update_kaomoji_pack");
+}
+
+export async function uninstallKaomojiPack(): Promise<void> {
+  return invoke("uninstall_kaomoji_pack");
+}

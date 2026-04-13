@@ -5,6 +5,11 @@ import { isEmojiSnippet, parseTags } from "../lib/snippetDisplay";
 import { FormView, parseVariables, hasFormVariables } from "./FormView";
 import type { SnippetVariable } from "../lib/types";
 
+function isEmojiOrKaomoji(snippet: { tags: string | null }): boolean {
+  const tags = parseTags(snippet.tags);
+  return tags.includes("emoji") || tags.includes("kaomoji");
+}
+
 interface ExpanderPaletteProps {
   onClose: () => void;
   onExpand: (text: string) => void;
@@ -12,7 +17,21 @@ interface ExpanderPaletteProps {
 
 export function ExpanderPalette({ onClose, onExpand }: ExpanderPaletteProps) {
   const [search, setSearch] = useState("");
-  const { snippets } = useSnippets(search || undefined);
+  const { snippets: rawSnippets } = useSnippets(search || undefined);
+
+  // Colon-prefix emoji boost: filter to emoji/kaomoji only when search starts with ":"
+  // Otherwise sort non-emoji first, emoji/kaomoji to the bottom
+  const snippets = useMemo(() => {
+    if (search.startsWith(":")) {
+      return rawSnippets.filter(isEmojiOrKaomoji);
+    }
+    return [...rawSnippets].sort((a, b) => {
+      const aIsEmoji = isEmojiOrKaomoji(a) ? 1 : 0;
+      const bIsEmoji = isEmojiOrKaomoji(b) ? 1 : 0;
+      return aIsEmoji - bIsEmoji;
+    });
+  }, [rawSnippets, search]);
+
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [formSnippetId, setFormSnippetId] = useState<string | null>(null);
   const [formVariables, setFormVariables] = useState<SnippetVariable[]>([]);

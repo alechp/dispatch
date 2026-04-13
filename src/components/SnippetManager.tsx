@@ -11,8 +11,14 @@ import {
   installEmojiPack,
   uninstallEmojiPack,
   updateEmojiPack,
+  getKaomojiPackStatus,
+  installKaomojiPack,
+  uninstallKaomojiPack,
+  updateKaomojiPack,
   updateSnippetSource,
   refreshTriggers,
+  listFavoriteSnippets,
+  listRecentSnippets,
 } from "../lib/snippets";
 import {
   getLiveExpansionEnabled,
@@ -110,6 +116,11 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
   const [view, setView] = useState<ViewMode>("list");
   const [editingSnippet, setEditingSnippet] = useState<Snippet | null>(null);
 
+  // Tab-cycling between All / Favorites / Recent (§4.2)
+  const [listTab, setListTab] = useState<"all" | "favorites" | "recent">("all");
+  const [favoriteSnippets, setFavoriteSnippets] = useState<Snippet[]>([]);
+  const [recentSnippets, setRecentSnippets] = useState<Snippet[]>([]);
+
   // Group snippets by source
   const groupedSnippets = useMemo(() => {
     const groups: { name: string; sourceId: string | null; snippets: Snippet[] }[] = [];
@@ -126,10 +137,48 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
       group.snippets.push(snippet);
     }
 
-    return groups;
-  }, [snippets]);
+    // When there is no search query, hide emoji/kaomoji packs to avoid
+    // overwhelming the list with thousands of entries.
+    if (!search) {
+      return groups.filter((g) => g.name !== "Emoji Pack" && g.name !== "Kaomoji Pack");
+    }
 
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+    return groups;
+  }, [snippets, search]);
+
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
+    try {
+      const stored = localStorage.getItem("dispatch_collapsed_groups");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) return new Set<string>(parsed);
+      }
+    } catch {
+      // ignore corrupt data
+    }
+    return new Set<string>();
+  });
+
+  // Persist collapsed groups to localStorage
+  useEffect(() => {
+    localStorage.setItem(
+      "dispatch_collapsed_groups",
+      JSON.stringify([...collapsedGroups])
+    );
+  }, [collapsedGroups]);
+
+  // Fetch favorites / recents when those tabs are selected
+  useEffect(() => {
+    if (listTab === "favorites") {
+      listFavoriteSnippets()
+        .then(setFavoriteSnippets)
+        .catch((err) => console.error("Failed to load favorites:", err));
+    } else if (listTab === "recent") {
+      listRecentSnippets(20)
+        .then(setRecentSnippets)
+        .catch((err) => console.error("Failed to load recents:", err));
+    }
+  }, [listTab]);
 
   const toggleGroup = useCallback((groupName: string) => {
     setCollapsedGroups((prev) => {
@@ -204,6 +253,7 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
 
       <div className="shrink-0">
         <EmojiPackCard onChanged={refresh} />
+        <KaomojiPackCard onChanged={refresh} />
       </div>
 
       {/* Source filter chip */}
@@ -221,12 +271,63 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
         </div>
       )}
 
+      {/* Tab bar: All / Favorites / Recent (§4.2) */}
+      <div className="flex items-center gap-1 px-4 py-1.5 border-b border-border-subtle bg-surface-overlay/30 shrink-0">
+        {(["all", "favorites", "recent"] as const).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setListTab(tab)}
+            className={`text-[11px] px-2.5 py-1 rounded-md transition-colors ${
+              listTab === tab
+                ? "bg-accent/15 text-accent font-medium"
+                : "text-text-tertiary hover:text-text-secondary"
+            }`}
+          >
+            {tab === "all" ? "All" : tab === "favorites" ? "\u2605 Favorites" : "\u25F7 Recent"}
+          </button>
+        ))}
+      </div>
+
       {/* Snippet list */}
       <div className="flex-1 overflow-y-auto">
         {loading ? (
           <div className="flex items-center justify-center h-32">
             <p className="text-sm text-text-tertiary">Loading snippets...</p>
           </div>
+        ) : listTab === "favorites" ? (
+          favoriteSnippets.length === 0 ? (
+            <div className="flex items-center justify-center h-32">
+              <p className="text-sm text-text-tertiary">No favorite snippets yet.</p>
+            </div>
+          ) : (
+            <div>
+              {favoriteSnippets.map((snippet) => (
+                <SnippetRow
+                  key={snippet.id}
+                  snippet={snippet}
+                  onClick={() => handleOpenEdit(snippet)}
+                  onRefresh={refresh}
+                />
+              ))}
+            </div>
+          )
+        ) : listTab === "recent" ? (
+          recentSnippets.length === 0 ? (
+            <div className="flex items-center justify-center h-32">
+              <p className="text-sm text-text-tertiary">No recently used snippets.</p>
+            </div>
+          ) : (
+            <div>
+              {recentSnippets.map((snippet) => (
+                <SnippetRow
+                  key={snippet.id}
+                  snippet={snippet}
+                  onClick={() => handleOpenEdit(snippet)}
+                  onRefresh={refresh}
+                />
+              ))}
+            </div>
+          )
         ) : snippets.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-32 gap-2">
             <p className="text-sm text-text-tertiary">No snippets found.</p>
@@ -398,6 +499,162 @@ function EmojiPackCard({ onChanged }: { onChanged: () => Promise<void> | void })
           </div>
           <p className="mt-1 text-[11px] text-text-secondary">
             Type emojis with <code className="font-mono text-accent">:shortcodes:</code> directly from Text Expander.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-text-tertiary">
+            <span>Version: {version}</span>
+            <span>Count: {count ?? "..."}</span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          {!installed ? (
+            <button
+              onClick={handleInstall}
+              disabled={busy !== null}
+              className="text-[11px] text-white bg-accent hover:bg-accent-hover transition-colors px-2.5 py-1 rounded-md disabled:opacity-50"
+            >
+              {busy === "install" ? "Installing..." : "Install"}
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={handleUpdate}
+                disabled={busy !== null}
+                className="text-[11px] text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50"
+              >
+                {busy === "update" ? "Updating..." : "Update"}
+              </button>
+              <button
+                onClick={handleToggle}
+                disabled={busy !== null}
+                className="text-[11px] text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50"
+              >
+                {busy === "toggle" ? "Saving..." : enabled ? "Disable" : "Enable"}
+              </button>
+              <button
+                onClick={handleRemove}
+                disabled={busy !== null}
+                className="text-[11px] text-error hover:text-red-400 transition-colors disabled:opacity-50"
+              >
+                {busy === "remove" ? "Removing..." : "Remove"}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// KaomojiPackCard
+// ---------------------------------------------------------------------------
+
+function KaomojiPackCard({ onChanged }: { onChanged: () => Promise<void> | void }) {
+  const [status, setStatus] = useState<EmojiPackStatus | null>(null);
+  const [busy, setBusy] = useState<"install" | "update" | "remove" | "toggle" | null>(null);
+  const { showToast } = useToast();
+
+  const refreshStatus = useCallback(async () => {
+    try {
+      const next = await getKaomojiPackStatus();
+      setStatus(next);
+    } catch (err) {
+      console.error("Failed to load kaomoji pack status:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshStatus();
+  }, [refreshStatus]);
+
+  const handleInstall = useCallback(async () => {
+    setBusy("install");
+    try {
+      const result = await installKaomojiPack();
+      showToast(`Installed Kaomoji Pack — +${result.added} ~${result.updated} -${result.removed}`);
+      await refreshStatus();
+      await onChanged();
+    } catch (err) {
+      console.error("Kaomoji pack install failed:", err);
+      showToast(`Failed to install Kaomoji Pack: ${err}`);
+    } finally {
+      setBusy(null);
+    }
+  }, [onChanged, refreshStatus, showToast]);
+
+  const handleUpdate = useCallback(async () => {
+    setBusy("update");
+    try {
+      const result = await updateKaomojiPack();
+      showToast(`Updated Kaomoji Pack — +${result.added} ~${result.updated} -${result.removed}`);
+      await refreshStatus();
+      await onChanged();
+    } catch (err) {
+      console.error("Kaomoji pack update failed:", err);
+      showToast(`Failed to update Kaomoji Pack: ${err}`);
+    } finally {
+      setBusy(null);
+    }
+  }, [onChanged, refreshStatus, showToast]);
+
+  const handleRemove = useCallback(async () => {
+    setBusy("remove");
+    try {
+      await uninstallKaomojiPack();
+      showToast("Removed Kaomoji Pack");
+      await refreshStatus();
+      await onChanged();
+    } catch (err) {
+      console.error("Kaomoji pack remove failed:", err);
+      showToast(`Failed to remove Kaomoji Pack: ${err}`);
+    } finally {
+      setBusy(null);
+    }
+  }, [onChanged, refreshStatus, showToast]);
+
+  const handleToggle = useCallback(async () => {
+    if (!status?.source) return;
+    setBusy("toggle");
+    try {
+      await updateSnippetSource(status.source.id, {
+        isEnabled: status.source.is_enabled === 0,
+      });
+      await refreshTriggers();
+      showToast(status.source.is_enabled === 1 ? "Kaomoji Pack disabled" : "Kaomoji Pack enabled");
+      await refreshStatus();
+      await onChanged();
+    } catch (err) {
+      console.error("Kaomoji pack toggle failed:", err);
+      showToast(`Failed to update Kaomoji Pack: ${err}`);
+    } finally {
+      setBusy(null);
+    }
+  }, [onChanged, refreshStatus, showToast, status]);
+
+  const installed = status?.installed ?? false;
+  const enabled = status?.source?.is_enabled === 1;
+  const count = status?.source?.item_count ?? status?.expected_count ?? null;
+  const version = status?.source?.source_version ?? status?.version ?? "Latest";
+
+  return (
+    <div className="px-4 py-3 border-b border-border-subtle bg-purple-500/5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-text-primary">Kaomoji Pack</span>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${
+              installed
+                ? enabled
+                  ? "border-success/30 text-success bg-success/10"
+                  : "border-warning/30 text-warning bg-warning/10"
+                : "border-border-subtle text-text-tertiary bg-surface-overlay/60"
+            }`}>
+              {installed ? (enabled ? "Installed" : "Disabled") : "Not installed"}
+            </span>
+          </div>
+          <p className="mt-1 text-[11px] text-text-secondary">
+            Text faces like <code className="font-mono text-accent">:shrug:</code>, <code className="font-mono text-accent">:tableflip:</code>, <code className="font-mono text-accent">:lenny:</code>
           </p>
           <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-text-tertiary">
             <span>Version: {version}</span>
