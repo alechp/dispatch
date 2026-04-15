@@ -52,6 +52,8 @@ import { copyToClipboard } from "../lib/liveExpansion";
 import { isEmojiPackSource } from "../lib/snippetDisplay";
 import { useToast } from "../hooks/useToast";
 import { HotkeySettings } from "./HotkeySettings";
+import { IntegrationSettings } from "./IntegrationSettings";
+import { RoutingPipelines } from "./RoutingPipelines";
 import type { BannerScreenKey, EmojiPackStatus, NotificationBannerConfig, SnippetSource } from "../lib/types";
 import { DEFAULT_BANNER_CONFIG, BANNER_SCREEN_LABELS } from "../lib/types";
 
@@ -61,7 +63,7 @@ interface YaptureSettingsProps {
   onBannerConfigChanged: () => void;
 }
 
-type SettingsTab = "yapture" | "hotkeys" | "notifications" | "sources";
+type SettingsTab = "yapture" | "hotkeys" | "notifications" | "sources" | "accounts" | "routing";
 
 type YaptureEnv = "production" | "staging" | "local";
 
@@ -1506,6 +1508,26 @@ export function YaptureSettings({ onBack, onHotkeyConfigChanged, onBannerConfigC
         >
           Sources
         </button>
+        <button
+          onClick={() => setActiveTab("accounts")}
+          className={`px-4 py-2 text-xs font-medium transition-colors border-b-2 ${
+            activeTab === "accounts"
+              ? "text-text-primary border-accent"
+              : "text-text-tertiary border-transparent hover:text-text-secondary"
+          }`}
+        >
+          Accounts
+        </button>
+        <button
+          onClick={() => setActiveTab("routing")}
+          className={`px-4 py-2 text-xs font-medium transition-colors border-b-2 ${
+            activeTab === "routing"
+              ? "text-text-primary border-accent"
+              : "text-text-tertiary border-transparent hover:text-text-secondary"
+          }`}
+        >
+          Routing
+        </button>
       </div>
 
       {/* Tab content */}
@@ -1518,6 +1540,8 @@ export function YaptureSettings({ onBack, onHotkeyConfigChanged, onBannerConfigC
           <NotificationSettingsTab onConfigChanged={onBannerConfigChanged} />
         )}
         {activeTab === "sources" && <ExpansionSourcesTab />}
+        {activeTab === "accounts" && <IntegrationSettings />}
+        {activeTab === "routing" && <RoutingPipelines />}
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod discord;
 mod emoji_pack;
 mod expander;
 mod file_parser;
@@ -10,12 +11,16 @@ mod log;
 mod macos_accessibility;
 #[cfg(target_os = "macos")]
 mod macos_listener;
+mod macos_notifications;
 mod models;
+mod routing;
 mod server;
+mod slack;
 mod state;
 mod text_injector;
 mod tray;
 mod trigger_cache;
+mod webhook;
 mod yapture;
 
 use std::sync::atomic::Ordering;
@@ -373,6 +378,174 @@ pub fn run() {
                                         }
                                     }
                                 }
+                            }
+                        });
+                        return;
+                    }
+
+                    // Handle Discord OAuth callback
+                    if url_str.starts_with("dispatch://oauth/discord/callback") {
+                        eprintln!("[oauth-discord] received callback: {}", url_str);
+                        let parsed = match url::Url::parse(&url_str) {
+                            Ok(u) => u,
+                            Err(e) => {
+                                eprintln!("[oauth-discord] failed to parse URL: {}", e);
+                                return;
+                            }
+                        };
+                        let params: std::collections::HashMap<String, String> = parsed
+                            .query_pairs()
+                            .map(|(k, v)| (k.to_string(), v.to_string()))
+                            .collect();
+
+                        let code = match params.get("code") {
+                            Some(c) => c.clone(),
+                            None => { eprintln!("[oauth-discord] no code"); return; }
+                        };
+                        let callback_state = match params.get("state") {
+                            Some(s) => s.clone(),
+                            None => { eprintln!("[oauth-discord] no state"); return; }
+                        };
+
+                        let pending = {
+                            let mut guard = deep_link_state.oauth_pending_integration.lock().unwrap();
+                            guard.take()
+                        };
+                        let pending = match pending {
+                            Some(p) if p.provider == "discord" && p.state == callback_state => p,
+                            _ => { eprintln!("[oauth-discord] state mismatch or no pending flow"); return; }
+                        };
+
+                        let state_for_async = deep_link_state.clone();
+                        let handle_for_async = deep_link_handle.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let http = reqwest::Client::new();
+                            let code_verifier = pending.code_verifier.unwrap_or_default();
+                            let tokens = match discord::exchange_code(&http, &code, &code_verifier).await {
+                                Ok(t) => t,
+                                Err(e) => { eprintln!("[oauth-discord] token exchange failed: {}", e); return; }
+                            };
+                            let user = match discord::fetch_current_user(&http, &tokens.access_token).await {
+                                Ok(u) => u,
+                                Err(e) => { eprintln!("[oauth-discord] user fetch failed: {}", e); return; }
+                            };
+                            let expires_at = discord::calculate_token_expiry(tokens.expires_in);
+                            let account = db::create_notification_account(
+                                &state_for_async.db,
+                                "discord",
+                                &format!("Discord ({})", user.display_name()),
+                                &tokens.access_token,
+                                tokens.refresh_token.as_deref(),
+                                Some(&expires_at),
+                                Some(&tokens.scope),
+                                Some(&user.id),
+                                Some(&user.display_name()),
+                                user.avatar_url().as_deref(),
+                                None, None,
+                            ).await;
+                            match account {
+                                Ok(acc) => {
+                                    let _ = db::init_default_screen_toggles(&state_for_async.db, &acc.id).await;
+                                    eprintln!("[oauth-discord] account created: {}", acc.id);
+                                    if let Some(window) = handle_for_async.get_webview_window("main") {
+                                        let _ = window.emit("discord-account-connected", &acc);
+                                    }
+                                }
+                                Err(e) => eprintln!("[oauth-discord] account creation failed: {}", e),
+                            }
+                        });
+                        return;
+                    }
+
+                    // Handle Slack OAuth callback
+                    if url_str.starts_with("dispatch://oauth/slack/callback") {
+                        eprintln!("[oauth-slack] received callback: {}", url_str);
+                        let parsed = match url::Url::parse(&url_str) {
+                            Ok(u) => u,
+                            Err(e) => {
+                                eprintln!("[oauth-slack] failed to parse URL: {}", e);
+                                return;
+                            }
+                        };
+                        let params: std::collections::HashMap<String, String> = parsed
+                            .query_pairs()
+                            .map(|(k, v)| (k.to_string(), v.to_string()))
+                            .collect();
+
+                        let code = match params.get("code") {
+                            Some(c) => c.clone(),
+                            None => { eprintln!("[oauth-slack] no code"); return; }
+                        };
+                        let callback_state = match params.get("state") {
+                            Some(s) => s.clone(),
+                            None => { eprintln!("[oauth-slack] no state"); return; }
+                        };
+
+                        let pending = {
+                            let mut guard = deep_link_state.oauth_pending_integration.lock().unwrap();
+                            guard.take()
+                        };
+                        let pending = match pending {
+                            Some(p) if p.provider == "slack" && p.state == callback_state => p,
+                            _ => { eprintln!("[oauth-slack] state mismatch or no pending flow"); return; }
+                        };
+                        let _ = pending; // Slack doesn't use PKCE
+
+                        let state_for_async = deep_link_state.clone();
+                        let handle_for_async = deep_link_handle.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let http = reqwest::Client::new();
+                            let token_response = match slack::exchange_code(&http, &code, None).await {
+                                Ok(t) => t,
+                                Err(e) => { eprintln!("[oauth-slack] token exchange failed: {}", e); return; }
+                            };
+                            let access_token = token_response.authed_user
+                                .as_ref()
+                                .and_then(|u| u.access_token.as_ref())
+                                .or(token_response.access_token.as_ref());
+                            let access_token = match access_token {
+                                Some(t) => t.clone(),
+                                None => { eprintln!("[oauth-slack] no access token in response"); return; }
+                            };
+                            let auth = match slack::auth_test(&http, &access_token).await {
+                                Ok(a) => a,
+                                Err(e) => { eprintln!("[oauth-slack] auth.test failed: {}", e); return; }
+                            };
+                            let team_name = auth.team.as_deref().unwrap_or("Slack");
+                            let user_name = auth.user.as_deref().unwrap_or("unknown");
+                            let expires_at = token_response.authed_user
+                                .as_ref()
+                                .and_then(|u| u.expires_in)
+                                .or(token_response.expires_in)
+                                .map(slack::calculate_token_expiry);
+                            let refresh_token = token_response.authed_user
+                                .as_ref()
+                                .and_then(|u| u.refresh_token.as_ref())
+                                .or(token_response.refresh_token.as_ref());
+
+                            let account = db::create_notification_account(
+                                &state_for_async.db,
+                                "slack",
+                                &format!("{} ({})", team_name, user_name),
+                                &access_token,
+                                refresh_token.map(|s| s.as_str()),
+                                expires_at.as_deref(),
+                                token_response.authed_user.as_ref().and_then(|u| u.scope.as_deref()),
+                                auth.user_id.as_deref(),
+                                Some(user_name),
+                                None,
+                                auth.team_id.as_deref(),
+                                Some(team_name),
+                            ).await;
+                            match account {
+                                Ok(acc) => {
+                                    let _ = db::init_default_screen_toggles(&state_for_async.db, &acc.id).await;
+                                    eprintln!("[oauth-slack] account created: {}", acc.id);
+                                    if let Some(window) = handle_for_async.get_webview_window("main") {
+                                        let _ = window.emit("slack-account-connected", &acc);
+                                    }
+                                }
+                                Err(e) => eprintln!("[oauth-slack] account creation failed: {}", e),
                             }
                         });
                         return;
@@ -775,6 +948,36 @@ pub fn run() {
             commands::get_trigger_cache_count,
             commands::read_source_file,
             commands::write_source_file,
+            // Notification accounts
+            commands::list_notification_accounts,
+            commands::get_notification_account,
+            commands::update_notification_account_label,
+            commands::toggle_notification_account,
+            commands::delete_notification_account,
+            commands::get_account_screen_toggles,
+            commands::set_account_screen_toggle,
+            commands::set_monitored_channels,
+            commands::test_account_connection,
+            // Discord integration
+            commands::discord_start_oauth,
+            commands::discord_fetch_channels,
+            // Slack integration
+            commands::slack_start_oauth,
+            commands::slack_fetch_conversations,
+            // Routing rules
+            commands::list_routing_rules,
+            commands::get_routing_rule,
+            commands::create_routing_rule,
+            commands::update_routing_rule,
+            commands::delete_routing_rule,
+            commands::toggle_routing_rule,
+            commands::test_routing_rule,
+            commands::get_routing_log,
+            commands::validate_routing_chain,
+            // macOS push config
+            commands::get_macos_push_config,
+            commands::set_macos_push_config,
+            commands::send_test_push,
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri application")

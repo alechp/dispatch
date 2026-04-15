@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { NotificationResponse, ProjectSession, QueryFilters, HotkeyConfig, NotificationBannerConfig } from "./types";
+import type { NotificationResponse, ProjectSession, QueryFilters, HotkeyConfig, NotificationBannerConfig, NotificationAccount, AccountScreenToggles, RoutingRule, RoutingLogEntry } from "./types";
 import { DEFAULT_BANNER_CONFIG } from "./types";
 
 export async function getNotifications(
@@ -116,4 +116,161 @@ export async function setYaptureV2Config(config: {
 
 export async function testYaptureV2Connection(): Promise<boolean> {
   return invoke<boolean>("test_yapture_v2_connection");
+}
+
+// ── Notification Accounts API ───────────────────────────────────────
+
+export async function listNotificationAccounts(): Promise<NotificationAccount[]> {
+  return invoke("list_notification_accounts");
+}
+
+export async function getNotificationAccount(id: string): Promise<NotificationAccount> {
+  return invoke("get_notification_account", { id });
+}
+
+export async function updateNotificationAccountLabel(id: string, label: string): Promise<void> {
+  return invoke("update_notification_account_label", { id, label });
+}
+
+export async function toggleNotificationAccount(id: string, enabled: boolean): Promise<void> {
+  return invoke("toggle_notification_account", { id, enabled });
+}
+
+export async function deleteNotificationAccount(id: string): Promise<void> {
+  return invoke("delete_notification_account", { id });
+}
+
+export async function getAccountScreenToggles(accountId: string): Promise<AccountScreenToggles> {
+  return invoke("get_account_screen_toggles", { accountId });
+}
+
+export async function setAccountScreenToggle(accountId: string, screen: string, visible: boolean): Promise<void> {
+  return invoke("set_account_screen_toggle", { accountId, screen, visible });
+}
+
+export async function setMonitoredChannels(accountId: string, channels: string): Promise<void> {
+  return invoke("set_monitored_channels", { accountId, channels });
+}
+
+export async function testAccountConnection(id: string): Promise<string> {
+  return invoke("test_account_connection", { id });
+}
+
+// ── Discord API ─────────────────────────────────────────────────────
+
+export async function discordStartOAuth(clientId: string): Promise<string> {
+  return invoke("discord_start_oauth", { clientId });
+}
+
+export interface DiscordChannel {
+  id: string;
+  name: string;
+  channel_type: number;
+}
+
+export async function discordFetchChannels(accountId: string): Promise<DiscordChannel[]> {
+  return invoke("discord_fetch_channels", { accountId });
+}
+
+// ── Slack API ───────────────────────────────────────────────────────
+
+export async function slackStartOAuth(clientId: string, relayUrl: string): Promise<string> {
+  return invoke("slack_start_oauth", { clientId, relayUrl });
+}
+
+export interface SlackConversation {
+  id: string;
+  name: string;
+  is_channel: boolean;
+  is_private: boolean;
+}
+
+export async function slackFetchConversations(accountId: string): Promise<SlackConversation[]> {
+  return invoke("slack_fetch_conversations", { accountId });
+}
+
+// ── Routing Rules API ───────────────────────────────────────────────
+
+export async function listRoutingRules(): Promise<RoutingRule[]> {
+  return invoke("list_routing_rules");
+}
+
+export async function getRoutingRule(id: string): Promise<RoutingRule> {
+  return invoke("get_routing_rule", { id });
+}
+
+export async function createRoutingRule(rule: Omit<RoutingRule, "id" | "created_at" | "updated_at">): Promise<string> {
+  return invoke("create_routing_rule", {
+    name: rule.name,
+    sourceType: rule.source_type,
+    sourceValue: rule.source_value ?? null,
+    destinationType: rule.destination_type,
+    destinationConfig: JSON.stringify(rule.destination_config),
+    template: rule.template ?? null,
+    filterEventTypes: rule.filter_event_types ? JSON.stringify(rule.filter_event_types) : null,
+    filterKeywords: rule.filter_keywords ? JSON.stringify(rule.filter_keywords) : null,
+    priority: rule.priority,
+    stopOnMatch: rule.stop_on_match,
+    chainRuleId: rule.chain_rule_id ?? null,
+  });
+}
+
+export async function updateRoutingRule(id: string, updates: Partial<RoutingRule>): Promise<void> {
+  return invoke("update_routing_rule", {
+    id,
+    name: updates.name ?? null,
+    sourceType: updates.source_type ?? null,
+    sourceValue: updates.source_value ?? null,
+    destinationType: updates.destination_type ?? null,
+    destinationConfig: updates.destination_config ? JSON.stringify(updates.destination_config) : null,
+    template: updates.template ?? null,
+    filterEventTypes: updates.filter_event_types ? JSON.stringify(updates.filter_event_types) : null,
+    filterKeywords: updates.filter_keywords ? JSON.stringify(updates.filter_keywords) : null,
+    priority: updates.priority ?? null,
+    stopOnMatch: updates.stop_on_match ?? null,
+    chainRuleId: updates.chain_rule_id ?? null,
+  });
+}
+
+export async function deleteRoutingRule(id: string): Promise<void> {
+  return invoke("delete_routing_rule", { id });
+}
+
+export async function toggleRoutingRule(id: string, enabled: boolean): Promise<void> {
+  return invoke("toggle_routing_rule", { id, enabled });
+}
+
+export async function testRoutingRule(id: string): Promise<string> {
+  return invoke("test_routing_rule", { id });
+}
+
+export async function getRoutingLog(limit?: number): Promise<RoutingLogEntry[]> {
+  return invoke("get_routing_log", { limit: limit ?? 50 });
+}
+
+export async function validateRoutingChain(ruleId: string): Promise<string> {
+  return invoke("validate_routing_chain", { ruleId });
+}
+
+// ── macOS Push Notifications API ────────────────────────────────────
+
+export interface MacOSPushConfig {
+  enabled: boolean;
+  sound: boolean;
+  quiet_hours_start: string | null;
+  quiet_hours_end: string | null;
+  suppress_when_focused: boolean;
+}
+
+export async function getMacosPushConfig(): Promise<MacOSPushConfig> {
+  const json: string = await invoke("get_macos_push_config");
+  return JSON.parse(json);
+}
+
+export async function setMacosPushConfig(config: MacOSPushConfig): Promise<void> {
+  return invoke("set_macos_push_config", { configJson: JSON.stringify(config) });
+}
+
+export async function sendTestPush(): Promise<void> {
+  return invoke("send_test_push");
 }

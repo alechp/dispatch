@@ -808,6 +808,7 @@ pub async fn list_snippets(
     search: Option<&str>,
     tag: Option<&str>,
     source_id: Option<&str>,
+    limit: Option<i64>,
 ) -> Result<Vec<crate::models::Snippet>, sqlx::Error> {
     let mut sql = format!("SELECT {} FROM snippets s LEFT JOIN snippet_sources ss ON s.source_id = ss.id WHERE s.is_enabled = 1 AND (s.source_id IS NULL OR ss.is_enabled = 1 OR ss.is_enabled IS NULL)", SNIPPET_COLS_WITH_SOURCE);
     let mut args: Vec<String> = Vec::new();
@@ -815,6 +816,9 @@ pub async fn list_snippets(
     if let Some(sid) = source_id {
         sql.push_str(" AND s.source_id = ?");
         args.push(sid.to_string());
+    } else if search.is_none() {
+        // Exclude managed pack sources from default load (no search, no source filter)
+        sql.push_str(" AND (ss.managed_key IS NULL OR s.source_id IS NULL)");
     }
     if let Some(s) = search {
         sql.push_str(" AND (s.trigger LIKE ? OR s.label LIKE ? OR s.body LIKE ? OR s.tags LIKE ?)");
@@ -829,6 +833,12 @@ pub async fn list_snippets(
         args.push(format!("%\"{}\"%", t));
     }
     sql.push_str(" ORDER BY s.use_count DESC, s.updated_at DESC");
+
+    // Apply limit: use provided limit, or default to 200 when searching
+    let effective_limit = limit.or(if search.is_some() { Some(200) } else { None });
+    if let Some(lim) = effective_limit {
+        sql.push_str(&format!(" LIMIT {}", lim));
+    }
 
     let mut query = sqlx::query_as::<_, SnippetRowWithSource>(&sql);
     for arg in &args {

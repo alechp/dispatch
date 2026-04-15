@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
-import type { Notification } from "../lib/types";
+import type { Notification, NotificationProvider } from "../lib/types";
+import { PROVIDER_COLORS } from "../lib/types";
 
 interface NotificationCardProps {
   notification: Notification;
@@ -60,6 +61,7 @@ export function NotificationCard({
 }: NotificationCardProps) {
   const isUnread = n.is_read === 0;
   const cardRef = useRef<HTMLDivElement>(null);
+  const providerColors = n.provider ? PROVIDER_COLORS[n.provider as NotificationProvider] : null;
 
   useEffect(() => {
     if (isSelected && cardRef.current) {
@@ -67,29 +69,38 @@ export function NotificationCard({
     }
   }, [isSelected]);
 
+  // Provider-colored left border when not in visual/selected mode
+  const borderClass = isVisualSelected
+    ? "bg-accent/20 border-l-2 border-l-warning"
+    : isSelected
+      ? "bg-accent/10 border-l-2 border-l-accent"
+      : providerColors
+        ? `${isUnread ? "bg-surface-raised" : "bg-surface"} border-l-2 ${providerColors.border}`
+        : isUnread
+          ? "bg-surface-raised"
+          : "bg-surface";
+
   return (
     <div
       ref={cardRef}
-      className={`group relative px-4 py-3 border-b border-border-subtle transition-colors ${
-        isVisualSelected
-          ? "bg-accent/20 border-l-2 border-l-warning"
-          : isSelected
-            ? "bg-accent/10 border-l-2 border-l-accent"
-            : isUnread
-              ? "bg-surface-raised"
-              : "bg-surface"
-      } hover:bg-surface-overlay`}
+      className={`group relative px-4 py-3 border-b border-border-subtle transition-colors ${borderClass} hover:bg-surface-overlay`}
       onClick={() => isUnread && onMarkRead(n.id)}
     >
       <div className="flex items-start gap-3">
-        {/* Index + unread indicator */}
-        <div className="flex flex-col items-center shrink-0 pt-0.5" style={{ minWidth: 16 }}>
+        {/* Index + unread indicator or provider avatar */}
+        <div className="flex flex-col items-center shrink-0 pt-0.5" style={{ minWidth: 20 }}>
           {isVisualSelected ? (
             <div className="w-3.5 h-3.5 rounded border border-accent bg-accent flex items-center justify-center">
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="20 6 9 17 4 12" />
               </svg>
             </div>
+          ) : n.provider_avatar_url ? (
+            <img
+              src={n.provider_avatar_url}
+              alt=""
+              className="w-5 h-5 rounded-full"
+            />
           ) : (
             <div
               className={`w-2 h-2 rounded-full ${
@@ -124,11 +135,33 @@ export function NotificationCard({
             </p>
           )}
 
+          {/* Provider author line */}
+          {n.provider_author && (
+            <div className="flex items-center gap-1 mt-0.5">
+              <span className={`text-[10px] font-medium ${providerColors?.text ?? "text-text-tertiary"}`}>
+                {n.provider_author}
+              </span>
+              {n.provider_channel_name && (
+                <>
+                  <span className="text-[10px] text-text-tertiary">in</span>
+                  <span className="text-[10px] text-text-secondary">{n.provider_channel_name}</span>
+                </>
+              )}
+            </div>
+          )}
+
           {/* Tags */}
           <div className="flex items-center gap-1.5 mt-1.5">
-            <span className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-surface-overlay text-text-tertiary">
-              {n.source}
-            </span>
+            {/* Provider badge (styled) or source badge */}
+            {n.provider && providerColors ? (
+              <span className={`inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded ${providerColors.badge} ${providerColors.text}`}>
+                {n.provider}
+              </span>
+            ) : (
+              <span className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-surface-overlay text-text-tertiary">
+                {n.source}
+              </span>
+            )}
             {n.event_type !== "notification" && (
               <span className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-surface-overlay text-text-tertiary">
                 {n.event_type}

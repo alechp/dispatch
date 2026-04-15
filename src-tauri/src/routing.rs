@@ -380,10 +380,10 @@ pub struct EvaluationNotification {
 
 /// Evaluate which rules match a notification (does NOT execute destinations).
 /// Returns the matching rules in priority order.
-pub fn evaluate_matching_rules(
-    rules: &[EvaluationRule],
-    notification: &EvaluationNotification,
-) -> Vec<&EvaluationRule> {
+pub fn evaluate_matching_rules<'a>(
+    rules: &'a [EvaluationRule],
+    notification: &'a EvaluationNotification,
+) -> Vec<&'a EvaluationRule> {
     let mut matching = Vec::new();
 
     // Rules are assumed to be sorted by priority DESC already

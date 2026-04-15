@@ -22,7 +22,7 @@ import { NotificationBanner } from "./components/NotificationBanner";
 import { listen } from "@tauri-apps/api/event";
 import { getExpandPrefix, createBoilerplateConfig, syncSnippetSource } from "./lib/snippets";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import type { Notification, QueryFilters, NotificationBannerConfig, BannerScreenKey } from "./lib/types";
+import type { Notification, QueryFilters, NotificationBannerConfig, BannerScreenKey, NotificationProvider } from "./lib/types";
 import { DEFAULT_BANNER_CONFIG } from "./lib/types";
 
 export type ActiveScreen = "feed" | "telemetry" | "expander" | "settings";
@@ -44,6 +44,7 @@ export default function App() {
   const [visualMode, setVisualMode] = useState(false);
   const [visualSelections, setVisualSelections] = useState<Set<string>>(new Set());
   const [expandPrefix, setExpandPrefix] = useState(":");
+  const [providerFilter, setProviderFilter] = useState<NotificationProvider | null>(null);
   const [visualAnchor, setVisualAnchor] = useState<number | null>(null);
   const [bannerConfig, setBannerConfig] = useState<NotificationBannerConfig>(DEFAULT_BANNER_CONFIG);
   const [newConfigPrompt, setNewConfigPrompt] = useState<{ folder: string; defaultName: string } | null>(null);
@@ -54,6 +55,7 @@ export default function App() {
     ...(filter === "unread" ? { is_read: 0 } : {}),
     ...(filter === "read" ? { is_read: 1 } : {}),
     ...(search ? { search } : {}),
+    ...(providerFilter ? { provider: providerFilter } : {}),
     limit: 100,
   };
 
@@ -417,6 +419,8 @@ export default function App() {
             onFilterChange={setFilter}
             activeFilter={filter}
             searchRef={searchRef}
+            providerFilter={providerFilter}
+            onProviderFilterChange={setProviderFilter}
           />
           {visualMode && (
             <div className="flex items-center justify-between px-4 py-1.5 bg-warning/10 border-b border-warning/20">
