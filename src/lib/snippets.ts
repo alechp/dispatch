@@ -1,8 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { EmojiPackStatus, Snippet, SnippetSource, SyncResult } from "./types";
 
-export async function listSnippets(search?: string, tag?: string, sourceId?: string): Promise<Snippet[]> {
-  return invoke("list_snippets", { search: search ?? null, tag: tag ?? null, sourceId: sourceId ?? null });
+export async function listSnippets(search?: string, tag?: string, sourceId?: string, limit?: number): Promise<Snippet[]> {
+  return invoke("list_snippets", { search: search ?? null, tag: tag ?? null, sourceId: sourceId ?? null, limit: limit ?? null });
 }
 
 export async function createSnippet(data: {

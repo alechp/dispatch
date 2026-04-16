@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { expandSnippet, listFavoriteSnippets, listRecentSnippets, listSnippets } from "../lib/snippets";
+import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { isEmojiSnippet, parseTags } from "../lib/snippetDisplay";
 import type { Snippet, SnippetVariable } from "../lib/types";
 
@@ -69,19 +70,20 @@ export function CommandPalette({
 
   // The actual search query in expansion mode (without the prefix)
   const expansionQuery = mode === "expansions" ? search : "";
+  const debouncedExpansionQuery = useDebouncedValue(expansionQuery, 250);
 
   // Auto-focus input on mount
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
-  // Fetch snippets when in expansion mode
+  // Fetch snippets when in expansion mode (debounced)
   useEffect(() => {
     if (mode !== "expansions") return;
-    listSnippets(expansionQuery || undefined)
+    listSnippets(debouncedExpansionQuery || undefined)
       .then(setSnippets)
       .catch((err) => console.error("Failed to fetch snippets:", err));
-  }, [mode, expansionQuery]);
+  }, [mode, debouncedExpansionQuery]);
 
   // Fetch recents and favorites on expansion mode entry
   useEffect(() => {
@@ -411,14 +413,23 @@ export function CommandPalette({
                   </p>
                 </div>
               ) : (
-                filteredSnippets.map((snippet, i) => (
-                  <SnippetRow
-                    key={snippet.id}
-                    snippet={snippet}
-                    selected={i === selectedIndex}
-                    onClick={() => handleSnippetSelect(snippet)}
-                  />
-                ))
+                <>
+                  {filteredSnippets.slice(0, 100).map((snippet, i) => (
+                    <SnippetRow
+                      key={snippet.id}
+                      snippet={snippet}
+                      selected={i === selectedIndex}
+                      onClick={() => handleSnippetSelect(snippet)}
+                    />
+                  ))}
+                  {filteredSnippets.length > 100 && (
+                    <div className="px-4 py-2 text-center">
+                      <p className="text-[11px] text-text-tertiary">
+                        {filteredSnippets.length - 100} more results — refine your search
+                      </p>
+                    </div>
+                  )}
+                </>
               )
             ) : (
               // Sectioned: favorites, recent, all
