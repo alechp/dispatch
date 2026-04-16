@@ -2021,6 +2021,136 @@ pub async fn slack_fetch_conversations(
 }
 
 // =============================================================================
+// Slack Relay Commands
+// =============================================================================
+
+#[tauri::command]
+pub async fn slack_relay_save_config(
+    state: State<'_, Arc<AppState>>,
+    relay_url: String,
+    api_key: String,
+    poll_interval: Option<u64>,
+) -> Result<(), String> {
+    db::set_setting(&state.db, "slack_relay_url", &relay_url)
+        .await
+        .map_err(|e| e.to_string())?;
+    db::set_setting(&state.db, "slack_relay_api_key", &api_key)
+        .await
+        .map_err(|e| e.to_string())?;
+    let interval = poll_interval.unwrap_or(30);
+    db::set_setting(&state.db, "slack_relay_poll_interval", &interval.to_string())
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn slack_relay_test_connection(
+    relay_url: String,
+) -> Result<String, String> {
+    crate::slack_poller::test_relay_connection(&relay_url).await?;
+    Ok("Relay server is reachable".to_string())
+}
+
+#[tauri::command]
+pub async fn slack_relay_start_polling(
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let relay_url = db::get_setting(&state.db, "slack_relay_url")
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("slack_relay_url not configured")?;
+
+    let api_key = db::get_setting(&state.db, "slack_relay_api_key")
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("slack_relay_api_key not configured")?;
+
+    let interval: u64 = db::get_setting(&state.db, "slack_relay_poll_interval")
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30);
+
+    // Find a slack account to associate notifications with (use first enabled slack account)
+    let accounts = db::list_notification_accounts(&state.db, Some("slack"))
+        .await
+        .map_err(|e| e.to_string())?;
+    let account_id = accounts
+        .first()
+        .map(|a| a.id.clone())
+        .unwrap_or_else(|| "slack-relay".to_string());
+
+    // Stop existing poller if running
+    {
+        let mut guard = state.slack_poller_stop.lock().map_err(|e| format!("Lock error: {}", e))?;
+        if let Some(stop_tx) = guard.take() {
+            let _ = stop_tx.send(true);
+        }
+    }
+
+    let stop_tx = crate::slack_poller::start_polling(
+        state.db.clone(),
+        state.tx.clone(),
+        relay_url,
+        api_key,
+        interval,
+        account_id,
+    );
+
+    let mut guard = state.slack_poller_stop.lock().map_err(|e| format!("Lock error: {}", e))?;
+    *guard = Some(stop_tx);
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn slack_relay_stop_polling(
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let mut guard = state.slack_poller_stop.lock().map_err(|e| format!("Lock error: {}", e))?;
+    if let Some(stop_tx) = guard.take() {
+        let _ = stop_tx.send(true);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn slack_relay_status(
+    state: State<'_, Arc<AppState>>,
+) -> Result<serde_json::Value, String> {
+    let is_running = {
+        let guard = state.slack_poller_stop.lock().map_err(|e| format!("Lock error: {}", e))?;
+        guard.is_some()
+    };
+
+    let last_poll = db::get_setting(&state.db, "slack_relay_last_poll")
+        .await
+        .ok()
+        .flatten();
+
+    let relay_url = db::get_setting(&state.db, "slack_relay_url")
+        .await
+        .ok()
+        .flatten();
+
+    let interval: u64 = db::get_setting(&state.db, "slack_relay_poll_interval")
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30);
+
+    Ok(serde_json::json!({
+        "is_running": is_running,
+        "last_poll": last_poll,
+        "relay_url": relay_url,
+        "poll_interval": interval,
+    }))
+}
+
+// =============================================================================
 // Routing Rule Commands
 // =============================================================================
 

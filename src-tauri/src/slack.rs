@@ -16,7 +16,9 @@ const SLACK_OAUTH_AUTHORIZE: &str = "https://slack.com/oauth/v2/authorize";
 // These would be set during Slack app registration
 const SLACK_CLIENT_ID: &str = "DISPATCH_SLACK_CLIENT_ID"; // TODO: Replace with actual
 const SLACK_REDIRECT_URI: &str = "dispatch://oauth/slack/callback";
-const SLACK_USER_SCOPES: &str = "channels:history,channels:read,groups:read,groups:history,im:history,im:read,mpim:history,mpim:read,users:read,users.profile:read,team:read";
+// Minimal scopes for relay-based approach: only need identity for registration.
+// The relay server receives events directly from Slack's Event API.
+const SLACK_USER_SCOPES: &str = "channels:read,users:read,team:read";
 
 // Token relay endpoint — holds the client_secret server-side
 const SLACK_TOKEN_RELAY_URL: &str = "https://relay.dispatch.app/slack/token"; // TODO: Set actual URL

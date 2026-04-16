@@ -19,6 +19,7 @@ pub struct AppState {
     /// Maps global shortcut string (e.g. "CommandOrControl+Shift+D") → action name
     pub global_shortcut_map: Arc<RwLock<HashMap<String, String>>>,
     pub oauth_pending_integration: std::sync::Mutex<Option<PendingIntegrationOAuth>>,
+    pub slack_poller_stop: std::sync::Mutex<Option<tokio::sync::watch::Sender<bool>>>,
 }
 
 pub struct PendingOAuth {
@@ -52,6 +53,7 @@ impl AppState {
             yapture_v2_tokens: std::sync::Mutex::new(YaptureTokens::default()),
             global_shortcut_map: Arc::new(RwLock::new(HashMap::new())),
             oauth_pending_integration: std::sync::Mutex::new(None),
+            slack_poller_stop: std::sync::Mutex::new(None),
         }
     }
 }

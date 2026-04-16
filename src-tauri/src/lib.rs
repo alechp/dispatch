@@ -16,6 +16,7 @@ mod models;
 mod routing;
 mod server;
 mod slack;
+mod slack_poller;
 mod state;
 mod text_injector;
 mod tray;
@@ -122,6 +123,28 @@ pub fn run() {
                     state.trigger_cache.clone(),
                 );
                 dlog!("setup: file watcher started");
+
+                // Auto-start Slack relay poller if configured
+                {
+                    let relay_url = db::get_setting(&state.db, "slack_relay_url").await.ok().flatten();
+                    let api_key = db::get_setting(&state.db, "slack_relay_api_key").await.ok().flatten();
+                    if let (Some(url), Some(key)) = (relay_url, api_key) {
+                        let interval: u64 = db::get_setting(&state.db, "slack_relay_poll_interval")
+                            .await.ok().flatten().and_then(|v| v.parse().ok()).unwrap_or(30);
+                        let accounts = db::list_notification_accounts(&state.db, Some("slack"))
+                            .await.unwrap_or_default();
+                        let account_id = accounts.first()
+                            .map(|a| a.id.clone())
+                            .unwrap_or_else(|| "slack-relay".to_string());
+                        let stop_tx = slack_poller::start_polling(
+                            state.db.clone(), state.tx.clone(), url, key, interval, account_id,
+                        );
+                        if let Ok(mut guard) = state.slack_poller_stop.lock() {
+                            *guard = Some(stop_tx);
+                        }
+                        dlog!("setup: slack relay poller auto-started");
+                    }
+                }
 
                 dlog!("setup: state initialized, trigger cache loaded");
 
@@ -967,6 +990,12 @@ pub fn run() {
             // Slack integration
             commands::slack_start_oauth,
             commands::slack_fetch_conversations,
+            // Slack relay
+            commands::slack_relay_save_config,
+            commands::slack_relay_test_connection,
+            commands::slack_relay_start_polling,
+            commands::slack_relay_stop_polling,
+            commands::slack_relay_status,
             // Routing rules
             commands::list_routing_rules,
             commands::get_routing_rule,

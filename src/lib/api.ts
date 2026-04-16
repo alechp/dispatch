@@ -189,6 +189,35 @@ export async function slackFetchConversations(accountId: string): Promise<SlackC
   return invoke("slack_fetch_conversations", { accountId });
 }
 
+// ── Slack Relay API ─────────────────────────────────────────────────
+
+export interface SlackRelayStatus {
+  is_running: boolean;
+  last_poll: string | null;
+  relay_url: string | null;
+  poll_interval: number;
+}
+
+export async function slackRelaySaveConfig(relayUrl: string, apiKey: string, pollInterval?: number): Promise<void> {
+  return invoke("slack_relay_save_config", { relayUrl, apiKey, pollInterval: pollInterval ?? null });
+}
+
+export async function slackRelayTestConnection(relayUrl: string): Promise<string> {
+  return invoke("slack_relay_test_connection", { relayUrl });
+}
+
+export async function slackRelayStartPolling(): Promise<void> {
+  return invoke("slack_relay_start_polling");
+}
+
+export async function slackRelayStopPolling(): Promise<void> {
+  return invoke("slack_relay_stop_polling");
+}
+
+export async function slackRelayStatus(): Promise<SlackRelayStatus> {
+  return invoke("slack_relay_status");
+}
+
 // ── Routing Rules API ───────────────────────────────────────────────
 
 export async function listRoutingRules(): Promise<RoutingRule[]> {

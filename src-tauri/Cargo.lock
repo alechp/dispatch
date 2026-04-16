@@ -1076,6 +1076,7 @@ dependencies = [
  "chrono",
  "crossbeam-channel",
  "dirs 5.0.1",
+ "dotenvy",
  "enigo",
  "futures",
  "notify",
