@@ -33,6 +33,9 @@ use crate::state::AppState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Load .env file (silently ignore if missing)
+    let _ = dotenvy::dotenv();
+
     // Install panic hook so silent panics are logged to file
     std::panic::set_hook(Box::new(|info| {
         let msg = format!("PANIC: {}", info);

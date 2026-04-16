@@ -12,10 +12,13 @@ const DISCORD_API_BASE: &str = "https://discord.com/api/v10";
 const DISCORD_OAUTH_AUTHORIZE: &str = "https://discord.com/oauth2/authorize";
 const DISCORD_OAUTH_TOKEN: &str = "https://discord.com/api/v10/oauth2/token";
 
-// These would be set during app registration
-const DISCORD_CLIENT_ID: &str = "DISPATCH_DISCORD_CLIENT_ID"; // TODO: Replace with actual client ID
 const DISCORD_REDIRECT_URI: &str = "dispatch://oauth/discord/callback";
 const DISCORD_SCOPES: &str = "identify guilds messages.read";
+
+fn discord_client_id() -> String {
+    std::env::var("DISCORD_CLIENT_ID")
+        .unwrap_or_else(|_| "DISPATCH_DISCORD_CLIENT_ID".to_string())
+}
 
 // --- OAuth Types ---
 
@@ -187,10 +190,11 @@ pub fn start_oauth_flow() -> (String, DiscordOAuthState) {
     // Generate PKCE
     let (code_verifier, code_challenge) = generate_pkce();
 
+    let client_id = discord_client_id();
     let auth_url = format!(
         "{}?client_id={}&response_type=code&redirect_uri={}&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
         DISCORD_OAUTH_AUTHORIZE,
-        DISCORD_CLIENT_ID,
+        client_id,
         urlencoding::encode(DISCORD_REDIRECT_URI),
         urlencoding::encode(DISCORD_SCOPES),
         state,
@@ -211,11 +215,12 @@ pub async fn exchange_code(
     code: &str,
     code_verifier: &str,
 ) -> Result<DiscordTokenResponse, String> {
+    let client_id = discord_client_id();
     let params = [
         ("grant_type", "authorization_code"),
         ("code", code),
         ("redirect_uri", DISCORD_REDIRECT_URI),
-        ("client_id", DISCORD_CLIENT_ID),
+        ("client_id", client_id.as_str()),
         ("code_verifier", code_verifier),
     ];
 
@@ -246,10 +251,11 @@ pub async fn refresh_token(
     http: &reqwest::Client,
     refresh_token_value: &str,
 ) -> Result<DiscordTokenResponse, String> {
+    let client_id = discord_client_id();
     let params = [
         ("grant_type", "refresh_token"),
         ("refresh_token", refresh_token_value),
-        ("client_id", DISCORD_CLIENT_ID),
+        ("client_id", client_id.as_str()),
     ];
 
     let response = http
