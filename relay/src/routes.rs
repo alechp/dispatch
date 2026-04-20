@@ -177,6 +177,42 @@ pub async fn register_user(
 }
 
 // ---------------------------------------------------------------------------
+// POST /api/register/discord
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Deserialize)]
+pub struct RegisterDiscordRequest {
+    pub discord_user_id: String,
+    pub api_key: String,
+}
+
+pub async fn register_discord_user(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<RegisterDiscordRequest>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let auth = headers
+        .get("X-API-Key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if auth.is_empty() {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    match db::register_discord_user(&state.pool, &req.discord_user_id, &req.api_key).await {
+        Ok(user_id) => Ok(Json(serde_json::json!({
+            "ok": true,
+            "user_id": user_id,
+        }))),
+        Err(e) => {
+            eprintln!("[relay] register_discord_user failed: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // GET /api/poll
 // ---------------------------------------------------------------------------
 
@@ -193,14 +229,15 @@ pub async fn poll_events(
         return Err(StatusCode::UNAUTHORIZED);
     }
 
-    let (user_id, _slack_user_id) =
-        match db::get_user_by_api_key(&state.pool, api_key).await {
+    // Unified lookup across Slack and Discord users
+    let (user_id, _provider_user_id, _provider) =
+        match db::get_user_by_api_key_any(&state.pool, api_key).await {
             Ok(Some(u)) => u,
             Ok(None) => {
                 return Err(StatusCode::UNAUTHORIZED);
             }
             Err(e) => {
-                eprintln!("[relay] get_user_by_api_key failed: {}", e);
+                eprintln!("[relay] get_user_by_api_key_any failed: {}", e);
                 return Err(StatusCode::INTERNAL_SERVER_ERROR);
             }
         };
