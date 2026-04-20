@@ -1,6 +1,7 @@
 mod commands;
 mod db;
 mod discord;
+mod discord_poller;
 mod emoji_pack;
 mod expander;
 mod file_parser;
@@ -143,6 +144,28 @@ pub fn run() {
                             *guard = Some(stop_tx);
                         }
                         dlog!("setup: slack relay poller auto-started");
+                    }
+                }
+
+                // Auto-start Discord relay poller if configured
+                {
+                    let relay_url = db::get_setting(&state.db, "discord_relay_url").await.ok().flatten();
+                    let api_key = db::get_setting(&state.db, "discord_relay_api_key").await.ok().flatten();
+                    if let (Some(url), Some(key)) = (relay_url, api_key) {
+                        let interval: u64 = db::get_setting(&state.db, "discord_relay_poll_interval")
+                            .await.ok().flatten().and_then(|v| v.parse().ok()).unwrap_or(15);
+                        let accounts = db::list_notification_accounts(&state.db, Some("discord"))
+                            .await.unwrap_or_default();
+                        let account_id = accounts.first()
+                            .map(|a| a.id.clone())
+                            .unwrap_or_else(|| "discord-relay".to_string());
+                        let stop_tx = discord_poller::start_polling(
+                            state.db.clone(), state.tx.clone(), url, key, interval, account_id,
+                        );
+                        if let Ok(mut guard) = state.discord_poller_stop.lock() {
+                            *guard = Some(stop_tx);
+                        }
+                        dlog!("setup: discord relay poller auto-started");
                     }
                 }
 
@@ -996,6 +1019,12 @@ pub fn run() {
             commands::slack_relay_start_polling,
             commands::slack_relay_stop_polling,
             commands::slack_relay_status,
+            // Discord relay
+            commands::discord_relay_save_config,
+            commands::discord_relay_test_connection,
+            commands::discord_relay_start_polling,
+            commands::discord_relay_stop_polling,
+            commands::discord_relay_status,
             // Routing rules
             commands::list_routing_rules,
             commands::get_routing_rule,

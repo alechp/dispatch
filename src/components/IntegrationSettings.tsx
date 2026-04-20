@@ -22,8 +22,13 @@ import {
   slackRelayStartPolling,
   slackRelayStopPolling,
   slackRelayStatus,
+  discordRelaySaveConfig,
+  discordRelayTestConnection,
+  discordRelayStartPolling,
+  discordRelayStopPolling,
+  discordRelayStatus,
 } from "../lib/api";
-import type { MacOSPushConfig, DiscordChannel, SlackConversation, SlackRelayStatus } from "../lib/api";
+import type { MacOSPushConfig, DiscordChannel, SlackConversation, SlackRelayStatus, DiscordRelayStatus } from "../lib/api";
 import type { NotificationAccount, AccountScreenToggles, BannerScreenKey } from "../lib/types";
 import { PROVIDER_COLORS, BANNER_SCREEN_LABELS } from "../lib/types";
 import { ToastContext } from "../hooks/useToast";
@@ -962,6 +967,182 @@ function SlackRelaySection({ showToast }: { showToast: (msg: string) => void }) 
 }
 
 // ---------------------------------------------------------------------------
+// DiscordRelaySection
+// ---------------------------------------------------------------------------
+
+function DiscordRelaySection({ showToast }: { showToast: (msg: string) => void }) {
+  const [relayUrl, setRelayUrl] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [pollInterval, setPollInterval] = useState(15);
+  const [status, setStatus] = useState<DiscordRelayStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [testing, setTesting] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    discordRelayStatus()
+      .then((s) => {
+        setStatus(s);
+        if (s.relay_url) setRelayUrl(s.relay_url);
+        setPollInterval(s.poll_interval || 15);
+      })
+      .catch((err) => console.error("[integration] Failed to load discord relay status:", err))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const refreshStatus = useCallback(async () => {
+    try {
+      const s = await discordRelayStatus();
+      setStatus(s);
+    } catch (err) {
+      console.error("[integration] discord relay status refresh failed:", err);
+    }
+  }, []);
+
+  const handleTestConnection = useCallback(async () => {
+    if (!relayUrl.trim()) {
+      showToast("Please enter a relay URL");
+      return;
+    }
+    setTesting(true);
+    try {
+      await discordRelayTestConnection(relayUrl.trim());
+      showToast("Relay server is reachable");
+    } catch (err) {
+      showToast(`Connection failed: ${err}`);
+    } finally {
+      setTesting(false);
+    }
+  }, [relayUrl, showToast]);
+
+  const handleSave = useCallback(async () => {
+    if (!relayUrl.trim() || !apiKey.trim()) {
+      showToast("Relay URL and API key are required");
+      return;
+    }
+    setSaving(true);
+    try {
+      await discordRelaySaveConfig(relayUrl.trim(), apiKey.trim(), pollInterval);
+      showToast("Discord relay config saved");
+      await refreshStatus();
+    } catch (err) {
+      showToast(`Failed to save config: ${err}`);
+    } finally {
+      setSaving(false);
+    }
+  }, [relayUrl, apiKey, pollInterval, showToast, refreshStatus]);
+
+  const handleTogglePolling = useCallback(async () => {
+    try {
+      if (status?.is_running) {
+        await discordRelayStopPolling();
+        showToast("Discord polling stopped");
+      } else {
+        await discordRelayStartPolling();
+        showToast("Discord polling started");
+      }
+      await refreshStatus();
+    } catch (err) {
+      showToast(`Failed to toggle polling: ${err}`);
+    }
+  }, [status?.is_running, showToast, refreshStatus]);
+
+  if (loading) {
+    return <p className="text-xs text-text-tertiary">Loading discord relay config...</p>;
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Relay URL */}
+      <div>
+        <label className="block text-[11px] text-text-secondary mb-1">Relay Server URL</label>
+        <input
+          type="text"
+          value={relayUrl}
+          onChange={(e) => setRelayUrl(e.target.value)}
+          placeholder="http://localhost:3001"
+          className="w-full bg-surface-overlay border border-border-subtle rounded-md px-3 py-1.5 text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent/50 transition-colors"
+        />
+      </div>
+
+      {/* API Key */}
+      <div>
+        <label className="block text-[11px] text-text-secondary mb-1">API Key (Discord)</label>
+        <input
+          type="password"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder="Your Discord relay poll API key"
+          className="w-full bg-surface-overlay border border-border-subtle rounded-md px-3 py-1.5 text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent/50 transition-colors"
+        />
+      </div>
+
+      {/* Poll interval */}
+      <div>
+        <label className="block text-[11px] text-text-secondary mb-1">Poll Interval</label>
+        <select
+          value={pollInterval}
+          onChange={(e) => setPollInterval(Number(e.target.value))}
+          className="bg-surface-overlay border border-border-subtle rounded-md px-3 py-1.5 text-xs text-text-primary focus:outline-none focus:border-accent/50 transition-colors"
+        >
+          <option value={10}>10 seconds</option>
+          <option value={15}>15 seconds</option>
+          <option value={30}>30 seconds</option>
+          <option value={60}>1 minute</option>
+        </select>
+      </div>
+
+      {/* Action buttons */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <button
+          onClick={handleSave}
+          disabled={saving || !relayUrl.trim() || !apiKey.trim()}
+          className="px-3 py-1.5 text-xs font-medium text-white bg-accent hover:bg-accent-hover rounded-md transition-colors disabled:opacity-50"
+        >
+          {saving ? "Saving..." : "Save Config"}
+        </button>
+        <button
+          onClick={handleTestConnection}
+          disabled={testing || !relayUrl.trim()}
+          className="px-3 py-1.5 text-xs font-medium text-text-primary bg-surface-overlay border border-border-subtle rounded-md hover:border-accent/30 transition-colors disabled:opacity-50"
+        >
+          {testing ? "Testing..." : "Test Connection"}
+        </button>
+        <button
+          onClick={handleTogglePolling}
+          className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+            status?.is_running
+              ? "text-error bg-error/10 border border-error/20 hover:bg-error/20"
+              : "text-text-primary bg-surface-overlay border border-border-subtle hover:border-accent/30"
+          }`}
+        >
+          {status?.is_running ? "Stop Polling" : "Start Polling"}
+        </button>
+      </div>
+
+      {/* Status indicator */}
+      <div className="flex items-center gap-3 text-[11px]">
+        <div className="flex items-center gap-1.5">
+          <span
+            className={`w-2 h-2 rounded-full ${
+              status?.is_running ? "bg-success" : "bg-text-tertiary"
+            }`}
+          />
+          <span className="text-text-secondary">
+            {status?.is_running ? "Polling active" : "Polling stopped"}
+          </span>
+        </div>
+        {status?.last_poll && (
+          <span className="text-text-tertiary">
+            Last poll: {new Date(status.last_poll).toLocaleTimeString()}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // IntegrationSettings (main export)
 // ---------------------------------------------------------------------------
 
@@ -1122,6 +1303,17 @@ export function IntegrationSettings({ onBack }: IntegrationSettingsProps) {
             Slack Relay (Event Subscriptions)
           </label>
           <SlackRelaySection showToast={showToast} />
+        </div>
+
+        {/* Divider */}
+        <div className="border-t border-border-subtle" />
+
+        {/* Discord Relay section */}
+        <div>
+          <label className="block text-[11px] font-semibold text-text-tertiary uppercase tracking-wider mb-3">
+            Discord Relay (Gateway)
+          </label>
+          <DiscordRelaySection showToast={showToast} />
         </div>
 
         {/* Divider */}

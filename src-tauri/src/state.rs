@@ -20,6 +20,7 @@ pub struct AppState {
     pub global_shortcut_map: Arc<RwLock<HashMap<String, String>>>,
     pub oauth_pending_integration: std::sync::Mutex<Option<PendingIntegrationOAuth>>,
     pub slack_poller_stop: std::sync::Mutex<Option<tokio::sync::watch::Sender<bool>>>,
+    pub discord_poller_stop: std::sync::Mutex<Option<tokio::sync::watch::Sender<bool>>>,
 }
 
 pub struct PendingOAuth {
@@ -54,6 +55,7 @@ impl AppState {
             global_shortcut_map: Arc::new(RwLock::new(HashMap::new())),
             oauth_pending_integration: std::sync::Mutex::new(None),
             slack_poller_stop: std::sync::Mutex::new(None),
+            discord_poller_stop: std::sync::Mutex::new(None),
         }
     }
 }

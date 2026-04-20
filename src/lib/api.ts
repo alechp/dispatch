@@ -218,6 +218,35 @@ export async function slackRelayStatus(): Promise<SlackRelayStatus> {
   return invoke("slack_relay_status");
 }
 
+// ── Discord Relay API ───────────────────────────────────────────────
+
+export interface DiscordRelayStatus {
+  is_running: boolean;
+  last_poll: string | null;
+  relay_url: string | null;
+  poll_interval: number;
+}
+
+export async function discordRelaySaveConfig(relayUrl: string, apiKey: string, pollInterval?: number): Promise<void> {
+  return invoke("discord_relay_save_config", { relayUrl, apiKey, pollInterval: pollInterval ?? null });
+}
+
+export async function discordRelayTestConnection(relayUrl: string): Promise<string> {
+  return invoke("discord_relay_test_connection", { relayUrl });
+}
+
+export async function discordRelayStartPolling(): Promise<void> {
+  return invoke("discord_relay_start_polling");
+}
+
+export async function discordRelayStopPolling(): Promise<void> {
+  return invoke("discord_relay_stop_polling");
+}
+
+export async function discordRelayStatus(): Promise<DiscordRelayStatus> {
+  return invoke("discord_relay_status");
+}
+
 // ── Routing Rules API ───────────────────────────────────────────────
 
 export async function listRoutingRules(): Promise<RoutingRule[]> {

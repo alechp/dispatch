@@ -1,4 +1,5 @@
 mod db;
+mod discord_gateway;
 mod routes;
 
 use std::sync::Arc;
@@ -26,14 +27,26 @@ async fn main() {
         .expect("Failed to initialize database");
 
     let state = Arc::new(routes::AppState {
-        pool,
+        pool: pool.clone(),
         signing_secret,
     });
+
+    // Spawn Discord Gateway if DISCORD_BOT_TOKEN is set
+    if let Ok(bot_token) = std::env::var("DISCORD_BOT_TOKEN") {
+        if !bot_token.is_empty() {
+            let gw_pool = pool.clone();
+            tokio::spawn(async move {
+                discord_gateway::run_gateway(gw_pool, bot_token).await;
+            });
+            eprintln!("[relay] Discord Gateway task spawned");
+        }
+    }
 
     let app = axum::Router::new()
         .route("/health", get(routes::health))
         .route("/slack/events", post(routes::slack_events))
         .route("/api/register", post(routes::register_user))
+        .route("/api/register/discord", post(routes::register_discord_user))
         .route("/api/poll", get(routes::poll_events))
         .with_state(state);
 
