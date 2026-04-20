@@ -1,0 +1,644 @@
+# Dispatch Kaomoji Pack
+# A curated collection of kaomoji (Japanese text emoticons) and text faces.
+#
+# This file is generated and managed by Dispatch.
+
+name = "Kaomoji Pack"
+
+# ============================================================================
+# Happy / Joy
+# ============================================================================
+
+[[snippets]]
+trigger = ":happy:"
+label = "Happy"
+body = "(◕‿◕)"
+tags = ["kaomoji", "happy", "joy", "smile"]
+
+[[snippets]]
+trigger = ":smile2:"
+label = "Smile"
+body = "(´∇｀)"
+tags = ["kaomoji", "happy", "joy", "smile"]
+
+[[snippets]]
+trigger = ":joy2:"
+label = "Joy"
+body = "(´•ᴗ•｀)"
+tags = ["kaomoji", "happy", "joy"]
+
+[[snippets]]
+trigger = ":glee:"
+label = "Glee"
+body = "ヽ(>∀<)ﾉ"
+tags = ["kaomoji", "happy", "joy", "glee", "excited"]
+
+[[snippets]]
+trigger = ":yay:"
+label = "Yay"
+body = '\(≧∇≦)/'
+tags = ["kaomoji", "happy", "joy", "yay", "celebrate"]
+
+[[snippets]]
+trigger = ":pleased:"
+label = "Pleased"
+body = "(ˆ‿ˆ)"
+tags = ["kaomoji", "happy", "pleased", "content"]
+
+[[snippets]]
+trigger = ":bliss:"
+label = "Bliss"
+body = "(｡◕∀◕｡)"
+tags = ["kaomoji", "happy", "bliss", "joy"]
+
+[[snippets]]
+trigger = ":cheerful:"
+label = "Cheerful"
+body = "(≧◡≦)"
+tags = ["kaomoji", "happy", "cheerful"]
+
+# ============================================================================
+# Sad / Crying
+# ============================================================================
+
+[[snippets]]
+trigger = ":cry:"
+label = "Cry"
+body = "(╥_╥)"
+tags = ["kaomoji", "sad", "cry", "tears"]
+
+[[snippets]]
+trigger = ":sob:"
+label = "Sob"
+body = "(;_;)"
+tags = ["kaomoji", "sad", "cry", "sob"]
+
+[[snippets]]
+trigger = ":bawl:"
+label = "Bawl"
+body = "(ಥ﹏ಥ)"
+tags = ["kaomoji", "sad", "cry", "bawl"]
+
+[[snippets]]
+trigger = ":whimper:"
+label = "Whimper"
+body = "(•́﹏•̀)"
+tags = ["kaomoji", "sad", "whimper"]
+
+[[snippets]]
+trigger = ":sadface:"
+label = "Sad Face"
+body = "(⊙_⊙)"
+tags = ["kaomoji", "sad", "face"]
+
+[[snippets]]
+trigger = ":crying:"
+label = "Crying"
+body = "(T_T)"
+tags = ["kaomoji", "sad", "crying"]
+
+# ============================================================================
+# Angry / Frustrated
+# ============================================================================
+
+[[snippets]]
+trigger = ":angry:"
+label = "Angry"
+body = "(ノಠ益ಠ)ノ"
+tags = ["kaomoji", "angry", "frustrated", "rage"]
+
+[[snippets]]
+trigger = ":rage:"
+label = "Rage"
+body = "(ง'̀-'́)ง"
+tags = ["kaomoji", "angry", "rage", "fists"]
+
+[[snippets]]
+trigger = ":fury:"
+label = "Fury"
+body = "(ﾉಠ益ಠ)ﾉ︵┻━┻"
+tags = ["kaomoji", "angry", "fury", "tableflip"]
+
+[[snippets]]
+trigger = ":grr:"
+label = "Grr"
+body = "(`ω´)"
+tags = ["kaomoji", "angry", "grr", "annoyed"]
+
+[[snippets]]
+trigger = ":annoyed:"
+label = "Annoyed"
+body = "(⌐_⌐)"
+tags = ["kaomoji", "angry", "annoyed"]
+
+[[snippets]]
+trigger = ":fume:"
+label = "Fume"
+body = "(＞＜)"
+tags = ["kaomoji", "angry", "fume", "frustrated"]
+
+# ============================================================================
+# Love / Affection
+# ============================================================================
+
+[[snippets]]
+trigger = ":love:"
+label = "Love"
+body = "(♥ω♥*)"
+tags = ["kaomoji", "love", "affection", "hearts"]
+
+[[snippets]]
+trigger = ":kiss:"
+label = "Kiss"
+body = "(⌐ ͡° ͜ʖ ͡°)"
+tags = ["kaomoji", "love", "kiss"]
+
+[[snippets]]
+trigger = ":heartface:"
+label = "Heart Face"
+body = "(≧◡≦)♥"
+tags = ["kaomoji", "love", "heart", "affection"]
+
+[[snippets]]
+trigger = ":lovestruck:"
+label = "Lovestruck"
+body = "(´･ω•｀)♥"
+tags = ["kaomoji", "love", "lovestruck"]
+
+[[snippets]]
+trigger = ":hug:"
+label = "Hug"
+body = "(づ￣³￣)づ"
+tags = ["kaomoji", "love", "hug", "affection"]
+
+[[snippets]]
+trigger = ":blush:"
+label = "Blush"
+body = "(＾‿＾)"
+tags = ["kaomoji", "love", "blush", "shy"]
+
+# ============================================================================
+# Surprise / Shock
+# ============================================================================
+
+[[snippets]]
+trigger = ":surprise:"
+label = "Surprise"
+body = "(⊙_⊙)"
+tags = ["kaomoji", "surprise", "shock"]
+
+[[snippets]]
+trigger = ":gasp:"
+label = "Gasp"
+body = "(ﾟ◁ﾟ)"
+tags = ["kaomoji", "surprise", "gasp", "shock"]
+
+[[snippets]]
+trigger = ":shock:"
+label = "Shock"
+body = "๏(๑o๑)๏"
+tags = ["kaomoji", "surprise", "shock"]
+
+[[snippets]]
+trigger = ":omg:"
+label = "OMG"
+body = "(｡O⌓O｡)"
+tags = ["kaomoji", "surprise", "omg"]
+
+[[snippets]]
+trigger = ":what:"
+label = "What"
+body = "(•̀_•́)?"
+tags = ["kaomoji", "surprise", "what", "confused"]
+
+[[snippets]]
+trigger = ":spooked:"
+label = "Spooked"
+body = "(°◁°)"
+tags = ["kaomoji", "surprise", "spooked", "scared"]
+
+# ============================================================================
+# Shrug / Confusion
+# ============================================================================
+
+[[snippets]]
+trigger = ":shrug:"
+label = "Shrug"
+body = '¯\_(ツ)_/¯'
+tags = ["kaomoji", "actions", "shrug", "whatever"]
+
+[[snippets]]
+trigger = ":confused:"
+label = "Confused"
+body = "(⊙_☉)"
+tags = ["kaomoji", "confused", "shrug"]
+
+[[snippets]]
+trigger = ":dunno:"
+label = "Dunno"
+body = '¯\_(ツ)_/¯'
+tags = ["kaomoji", "confused", "dunno", "shrug"]
+
+[[snippets]]
+trigger = ":idk:"
+label = "IDK"
+body = '¯\_(⌐■_■)_/¯'
+tags = ["kaomoji", "confused", "idk", "shrug", "cool"]
+
+[[snippets]]
+trigger = ":puzzled:"
+label = "Puzzled"
+body = "(？_？)"
+tags = ["kaomoji", "confused", "puzzled"]
+
+[[snippets]]
+trigger = ":huh:"
+label = "Huh"
+body = "(´・_・`)"
+tags = ["kaomoji", "confused", "huh"]
+
+# ============================================================================
+# Animals
+# ============================================================================
+
+[[snippets]]
+trigger = ":bear:"
+label = "Bear"
+body = "ʕ•ᴥ•ʔ"
+tags = ["kaomoji", "animals", "bear"]
+
+[[snippets]]
+trigger = ":cat:"
+label = "Cat"
+body = "(=^•ω•^=)"
+tags = ["kaomoji", "animals", "cat"]
+
+[[snippets]]
+trigger = ":dog:"
+label = "Dog"
+body = "Ʉ・ᴥ・Ʉ"
+tags = ["kaomoji", "animals", "dog"]
+
+[[snippets]]
+trigger = ":bunny:"
+label = "Bunny"
+body = "(๑´•̀.•́๑)"
+tags = ["kaomoji", "animals", "bunny", "rabbit"]
+
+[[snippets]]
+trigger = ":fish:"
+label = "Fish"
+body = "><(((*>"
+tags = ["kaomoji", "animals", "fish"]
+
+[[snippets]]
+trigger = ":spider:"
+label = "Spider"
+body = '/\(°°)/\'
+tags = ["kaomoji", "animals", "spider"]
+
+[[snippets]]
+trigger = ":bird:"
+label = "Bird"
+body = "(•̀ᴗ•́)๑"
+tags = ["kaomoji", "animals", "bird"]
+
+[[snippets]]
+trigger = ":butterfly:"
+label = "Butterfly"
+body = "ƸӁƷ"
+tags = ["kaomoji", "animals", "butterfly"]
+
+# ============================================================================
+# Actions (tableflip, unflip, etc.)
+# ============================================================================
+
+[[snippets]]
+trigger = ":tableflip:"
+label = "Tableflip"
+body = "(╯°□°)╯︵ ┻━┻"
+tags = ["kaomoji", "actions", "tableflip", "flip"]
+
+[[snippets]]
+trigger = ":unflip:"
+label = "Unflip"
+body = "┬─┬ノ( º _ ºノ)"
+tags = ["kaomoji", "actions", "unflip", "calm"]
+
+[[snippets]]
+trigger = ":fliptable:"
+label = "Fliptable Lenny"
+body = "(ノ ͡° ͜ʖ ͡°)ノ︵┻┻"
+tags = ["kaomoji", "actions", "fliptable", "lenny"]
+
+[[snippets]]
+trigger = ":throw:"
+label = "Throw"
+body = "(ノﾟ∀ﾟ)ノ︵"
+tags = ["kaomoji", "actions", "throw"]
+
+[[snippets]]
+trigger = ":run:"
+label = "Run"
+body = "╅┤(・_・)├╆"
+tags = ["kaomoji", "actions", "run"]
+
+[[snippets]]
+trigger = ":point:"
+label = "Point"
+body = "(☞ﾟヮﾟ)☞"
+tags = ["kaomoji", "actions", "point"]
+
+[[snippets]]
+trigger = ":flex:"
+label = "Flex"
+body = "ᕦ(ò_óˇ)ᕤ"
+tags = ["kaomoji", "actions", "flex", "strong"]
+
+[[snippets]]
+trigger = ":deal_with_it:"
+label = "Deal With It"
+body = "(•_•) ( •_•)>⌐■-■ (⌐■_■)"
+tags = ["kaomoji", "actions", "deal_with_it", "sunglasses", "cool"]
+
+[[snippets]]
+trigger = ":look:"
+label = "Look of Disapproval"
+body = "ಠ_ಠ"
+tags = ["kaomoji", "actions", "look", "disapproval"]
+
+# ============================================================================
+# Expressions (lenny, disapproval, etc.)
+# ============================================================================
+
+[[snippets]]
+trigger = ":lenny:"
+label = "Lenny Face"
+body = "( ͡° ͜ʖ ͡°)"
+tags = ["kaomoji", "expressions", "lenny"]
+
+[[snippets]]
+trigger = ":disapproval:"
+label = "Disapproval"
+body = "ಠ_ಠ"
+tags = ["kaomoji", "expressions", "disapproval", "look"]
+
+[[snippets]]
+trigger = ":eyebrow:"
+label = "Raised Eyebrow"
+body = "ಠ‿ಠ"
+tags = ["kaomoji", "expressions", "eyebrow", "suggestive"]
+
+[[snippets]]
+trigger = ":smirk:"
+label = "Smirk"
+body = "( ͡° ͜ʖ ͡°)"
+tags = ["kaomoji", "expressions", "smirk", "lenny"]
+
+[[snippets]]
+trigger = ":judging:"
+label = "Judging"
+body = "( ͡° ͡°)"
+tags = ["kaomoji", "expressions", "judging", "stare"]
+
+[[snippets]]
+trigger = ":whatever:"
+label = "Whatever"
+body = "ヽ(´ー｀)ノ"
+tags = ["kaomoji", "expressions", "whatever", "indifferent"]
+
+[[snippets]]
+trigger = ":smug:"
+label = "Smug"
+body = "(⌐■_■)"
+tags = ["kaomoji", "expressions", "smug", "cool", "sunglasses"]
+
+[[snippets]]
+trigger = ":wink:"
+label = "Wink"
+body = "(^_~)"
+tags = ["kaomoji", "expressions", "wink"]
+
+[[snippets]]
+trigger = ":thinking:"
+label = "Thinking"
+body = "(ー_ー)"
+tags = ["kaomoji", "expressions", "thinking"]
+
+[[snippets]]
+trigger = ":suspicious:"
+label = "Suspicious"
+body = "(¬_¬)"
+tags = ["kaomoji", "expressions", "suspicious", "side_eye"]
+
+# ============================================================================
+# Greetings / Waves
+# ============================================================================
+
+[[snippets]]
+trigger = ":wave:"
+label = "Wave"
+body = "(^_^)/"
+tags = ["kaomoji", "greetings", "wave", "hello"]
+
+[[snippets]]
+trigger = ":hello:"
+label = "Hello"
+body = "(｡◕∀◕｡)ﾉ"
+tags = ["kaomoji", "greetings", "hello", "hi"]
+
+[[snippets]]
+trigger = ":bye:"
+label = "Bye"
+body = "(･ω･)ﾉ"
+tags = ["kaomoji", "greetings", "bye", "goodbye"]
+
+[[snippets]]
+trigger = ":hi:"
+label = "Hi"
+body = "ヽ(・∀・)ﾉ"
+tags = ["kaomoji", "greetings", "hi", "wave"]
+
+[[snippets]]
+trigger = ":bowing:"
+label = "Bowing"
+body = "m(_ _)m"
+tags = ["kaomoji", "greetings", "bowing", "respect"]
+
+[[snippets]]
+trigger = ":salute:"
+label = "Salute"
+body = "(•̀_•́)ゞ"
+tags = ["kaomoji", "greetings", "salute"]
+
+# ============================================================================
+# Music / Dance
+# ============================================================================
+
+[[snippets]]
+trigger = ":dance:"
+label = "Dance"
+body = "♪┏(・o・)┛♪"
+tags = ["kaomoji", "music", "dance"]
+
+[[snippets]]
+trigger = ":sing:"
+label = "Sing"
+body = "♫ヽ(´▽`)ノ♫"
+tags = ["kaomoji", "music", "sing"]
+
+[[snippets]]
+trigger = ":groove:"
+label = "Groove"
+body = "♪╰(•́◡•̀)╯♪"
+tags = ["kaomoji", "music", "groove", "dance"]
+
+[[snippets]]
+trigger = ":party:"
+label = "Party"
+body = "⤜(ﾟ◔́∀◔̀ﾟ)⤏"
+tags = ["kaomoji", "music", "party", "celebrate"]
+
+[[snippets]]
+trigger = ":headbang:"
+label = "Headbang"
+body = "ヽ(•̀ಠ・̀)ノ"
+tags = ["kaomoji", "music", "headbang", "rock"]
+
+[[snippets]]
+trigger = ":dj:"
+label = "DJ"
+body = "d(•_•)b"
+tags = ["kaomoji", "music", "dj", "headphones"]
+
+# ============================================================================
+# Fighting / Battle
+# ============================================================================
+
+[[snippets]]
+trigger = ":fight:"
+label = "Fight"
+body = "(ง'̀-'́)ง"
+tags = ["kaomoji", "fighting", "battle", "fists"]
+
+[[snippets]]
+trigger = ":punch:"
+label = "Punch"
+body = "O-(≧◡≦)-O"
+tags = ["kaomoji", "fighting", "punch", "boxing"]
+
+[[snippets]]
+trigger = ":sword:"
+label = "Sword"
+body = "(/̀◔ ◔́)/ ╔═══╗"
+tags = ["kaomoji", "fighting", "sword", "battle"]
+
+[[snippets]]
+trigger = ":duel:"
+label = "Duel"
+body = "(ง▀▮▀)ง ๏฿๏ (▀▮▀ง)"
+tags = ["kaomoji", "fighting", "duel", "battle"]
+
+[[snippets]]
+trigger = ":archer:"
+label = "Archer"
+body = "(⌐■_■)--•-->>"
+tags = ["kaomoji", "fighting", "archer", "arrow"]
+
+[[snippets]]
+trigger = ":karate:"
+label = "Karate"
+body = "(ノ•̀ヘ•́)ノ"
+tags = ["kaomoji", "fighting", "karate", "martial_arts"]
+
+# ============================================================================
+# Magic / Sparkles
+# ============================================================================
+
+[[snippets]]
+trigger = ":sparkles:"
+label = "Sparkles"
+body = "(ﾉ◕ヮ◕)ﾉ*:・ﾟ✧"
+tags = ["kaomoji", "magic", "sparkles", "stars"]
+
+[[snippets]]
+trigger = ":wizard:"
+label = "Wizard"
+body = "(∩｀-´)⊃━☆ﾟ.*・｡ﾟ"
+tags = ["kaomoji", "magic", "wizard", "spell"]
+
+[[snippets]]
+trigger = ":magic:"
+label = "Magic"
+body = "(๑˘‿˘๑)"
+tags = ["kaomoji", "magic", "cute"]
+
+[[snippets]]
+trigger = ":stars:"
+label = "Stars"
+body = "+.ﾟ(♯'∀')♯.+ﾟ"
+tags = ["kaomoji", "magic", "stars", "sparkles"]
+
+[[snippets]]
+trigger = ":fairy:"
+label = "Fairy Dust"
+body = "✧・ﾟ: *✧・ﾟ:*"
+tags = ["kaomoji", "magic", "fairy", "sparkles"]
+
+[[snippets]]
+trigger = ":cast:"
+label = "Cast Spell"
+body = "(๑´•̀.•́๑)✧"
+tags = ["kaomoji", "magic", "cast", "spell"]
+
+# ============================================================================
+# Bears
+# ============================================================================
+
+[[snippets]]
+trigger = ":bear2:"
+label = "Bear Face"
+body = "ʕ •ᴥ• ʔ"
+tags = ["kaomoji", "bears", "animals", "bear"]
+
+[[snippets]]
+trigger = ":bearhappy:"
+label = "Happy Bear"
+body = "ʕ•ᴥ•ʔゞ"
+tags = ["kaomoji", "bears", "animals", "happy"]
+
+[[snippets]]
+trigger = ":bearsad:"
+label = "Sad Bear"
+body = "ʕ﹏ᴥ﹏ʔ"
+tags = ["kaomoji", "bears", "animals", "sad"]
+
+[[snippets]]
+trigger = ":bearangry:"
+label = "Angry Bear"
+body = "ʕಠᴥಠʔ"
+tags = ["kaomoji", "bears", "animals", "angry"]
+
+[[snippets]]
+trigger = ":bearlove:"
+label = "Love Bear"
+body = "ʕ♥ᴥ♥ʔ"
+tags = ["kaomoji", "bears", "animals", "love"]
+
+[[snippets]]
+trigger = ":bearflip:"
+label = "Bear Tableflip"
+body = "ʕ╯●ᴥ●ʔ╯︵ ┻━┻"
+tags = ["kaomoji", "bears", "animals", "tableflip"]
+
+[[snippets]]
+trigger = ":koala:"
+label = "Koala"
+body = "ʕ·ᴥ·ʔ"
+tags = ["kaomoji", "bears", "animals", "koala"]
+
+[[snippets]]
+trigger = ":bearwave:"
+label = "Bear Wave"
+body = "ʕ•ᴥ•ʔﾉ"
+tags = ["kaomoji", "bears", "animals", "wave", "greetings"]

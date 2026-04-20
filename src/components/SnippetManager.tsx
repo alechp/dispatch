@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useSnippets } from "../hooks/useSnippets";
 import { useToast } from "../hooks/useToast";
 import {
@@ -11,8 +11,15 @@ import {
   installEmojiPack,
   uninstallEmojiPack,
   updateEmojiPack,
+  getKaomojiPackStatus,
+  installKaomojiPack,
+  uninstallKaomojiPack,
+  updateKaomojiPack,
   updateSnippetSource,
   refreshTriggers,
+  listFavoriteSnippets,
+  listRecentSnippets,
+  listSnippets,
 } from "../lib/snippets";
 import {
   getLiveExpansionEnabled,
@@ -45,6 +52,52 @@ const VARIABLE_TYPES: SnippetVariable["type"][] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Pack category constants
+// ---------------------------------------------------------------------------
+
+interface PackCategory {
+  tag: string;
+  label: string;
+  icon: string;
+}
+
+const EMOJI_CATEGORIES: PackCategory[] = [
+  { tag: "smileys_emotion",  label: "Smileys & Emotion", icon: "\u{1F600}" },
+  { tag: "people_body",      label: "People & Body",     icon: "\u{1F44B}" },
+  { tag: "animals_nature",   label: "Animals & Nature",  icon: "\u{1F436}" },
+  { tag: "food_drink",       label: "Food & Drink",      icon: "\u{1F354}" },
+  { tag: "travel_places",    label: "Travel & Places",   icon: "\u2708\uFE0F" },
+  { tag: "activities",       label: "Activities",        icon: "\u26BD" },
+  { tag: "objects",          label: "Objects",           icon: "\u{1F4A1}" },
+  { tag: "symbols",          label: "Symbols",           icon: "\u{1F523}" },
+  { tag: "flags",            label: "Flags",             icon: "\u{1F3F3}\uFE0F" },
+];
+
+const KAOMOJI_CATEGORIES: PackCategory[] = [
+  { tag: "happy",       label: "Happy",       icon: "\u2267\u25E1\u2266" },
+  { tag: "sad",         label: "Sad",         icon: "\uFF08T_T\uFF09" },
+  { tag: "angry",       label: "Angry",       icon: "(\u256C \u00D2\uFE3F\u00D3)" },
+  { tag: "love",        label: "Love",        icon: "\u2661" },
+  { tag: "surprise",    label: "Surprise",    icon: "\u2211(\uFF9F\u0414\uFF9F)" },
+  { tag: "confused",    label: "Confused",    icon: "(\uFF1F_\uFF1F)" },
+  { tag: "animals",     label: "Animals",     icon: "\u0295\u2022\u1D25\u2022\u0294" },
+  { tag: "actions",     label: "Actions",     icon: "\u1555(\u141B)\u1557" },
+  { tag: "expressions", label: "Expressions", icon: "( \u0361\u00B0 \u035C\u0296 \u0361\u00B0)" },
+  { tag: "greetings",   label: "Greetings",   icon: "\uFF3F*^-^/" },
+  { tag: "music",       label: "Music",       icon: "\u266A\uFF5E" },
+  { tag: "fighting",    label: "Fighting",    icon: "\u1566(\u00F2_\u00F3)\u1564" },
+  { tag: "magic",       label: "Magic",       icon: "\uFF89\u25D5\u30EE\u25D5)\uFF89" },
+  { tag: "bears",       label: "Bears",       icon: "\u0295\u00B7\u1D25\u00B7\u0294" },
+];
+
+const PACK_CATEGORIES: Record<string, PackCategory[]> = {
+  "Emoji Pack": EMOJI_CATEGORIES,
+  "Kaomoji Pack": KAOMOJI_CATEGORIES,
+};
+
+const PACK_GROUPS = ["Emoji Pack", "Kaomoji Pack"];
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -68,33 +121,52 @@ function SourceGroupHeader({
   count,
   isCollapsed,
   onToggle,
+  searchOpen,
+  onToggleSearch,
 }: {
   name: string;
   count: number;
   isCollapsed: boolean;
   onToggle: () => void;
+  searchOpen?: boolean;
+  onToggleSearch?: () => void;
 }) {
   return (
-    <button
-      onClick={onToggle}
-      className="flex items-center w-full px-4 py-2 bg-surface-overlay/50 border-b border-border-subtle hover:bg-surface-overlay transition-colors group"
-    >
-      <svg
-        width="12"
-        height="12"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className={`text-text-tertiary transition-transform ${isCollapsed ? "" : "rotate-90"}`}
+    <div className="flex items-center w-full px-4 py-2 bg-surface-overlay/50 border-b border-border-subtle group">
+      <button
+        onClick={onToggle}
+        className="flex items-center flex-1 min-w-0 hover:opacity-80 transition-opacity"
       >
-        <polyline points="9 18 15 12 9 6" />
-      </svg>
-      <span className="ml-2 text-[11px] font-medium text-text-secondary">{name}</span>
-      <span className="ml-1.5 text-[10px] text-text-tertiary">({count})</span>
-    </button>
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className={`text-text-tertiary transition-transform shrink-0 ${isCollapsed ? "" : "rotate-90"}`}
+        >
+          <polyline points="9 18 15 12 9 6" />
+        </svg>
+        <span className="ml-2 text-[11px] font-medium text-text-secondary">{name}</span>
+        <span className="ml-1.5 text-[10px] text-text-tertiary">({count})</span>
+      </button>
+      {!isCollapsed && onToggleSearch && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onToggleSearch(); }}
+          className={`p-1 rounded transition-colors shrink-0 ${
+            searchOpen
+              ? "text-accent"
+              : "text-text-tertiary/0 group-hover:text-text-tertiary hover:!text-text-secondary"
+          }`}
+          title="Search in group"
+        >
+          <SearchIcon />
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -110,9 +182,34 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
   const [view, setView] = useState<ViewMode>("list");
   const [editingSnippet, setEditingSnippet] = useState<Snippet | null>(null);
 
-  // Group snippets by source
+  // Tab-cycling between All / Favorites / Recent (§4.2)
+  const [listTab, setListTab] = useState<"all" | "favorites" | "recent">("all");
+  const [favoriteSnippets, setFavoriteSnippets] = useState<Snippet[]>([]);
+  const [recentSnippets, setRecentSnippets] = useState<Snippet[]>([]);
+
+  // Pack status for stub group headers
+  const [emojiPackStatus, setEmojiPackStatus] = useState<EmojiPackStatus | null>(null);
+  const [kaomojiPackStatus, setKaomojiPackStatus] = useState<EmojiPackStatus | null>(null);
+  // On-demand loaded pack snippets keyed by source id
+  const [packSnippets] = useState<Record<string, Snippet[]>>({});
+
+  // Fetch pack statuses on mount
+  useEffect(() => {
+    getEmojiPackStatus().then(setEmojiPackStatus).catch(() => {});
+    getKaomojiPackStatus().then(setKaomojiPackStatus).catch(() => {});
+  }, []);
+
+  // Refresh pack statuses when snippets refresh
+  const refreshAll = useCallback(async () => {
+    await refresh();
+    setCategorySnippets({});
+    getEmojiPackStatus().then(setEmojiPackStatus).catch(() => {});
+    getKaomojiPackStatus().then(setKaomojiPackStatus).catch(() => {});
+  }, [refresh]);
+
+  // Group snippets by source, injecting pack stubs when not searching
   const groupedSnippets = useMemo(() => {
-    const groups: { name: string; sourceId: string | null; snippets: Snippet[] }[] = [];
+    const groups: { name: string; sourceId: string | null; snippets: Snippet[]; packCount?: number }[] = [];
     const groupMap = new Map<string, typeof groups[0]>();
 
     for (const snippet of snippets) {
@@ -126,10 +223,133 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
       group.snippets.push(snippet);
     }
 
-    return groups;
-  }, [snippets]);
+    // When not searching, inject stub groups for installed packs not already present
+    if (!search) {
+      const packInfos: { status: EmojiPackStatus | null; name: string }[] = [
+        { status: emojiPackStatus, name: "Emoji Pack" },
+        { status: kaomojiPackStatus, name: "Kaomoji Pack" },
+      ];
+      for (const { status, name } of packInfos) {
+        if (!status?.installed || !status.source) continue;
+        if (groupMap.has(name)) continue;
+        const sourceId = status.source.id;
+        // Use on-demand loaded snippets if available
+        const loaded = packSnippets[sourceId] ?? [];
+        const group = {
+          name,
+          sourceId,
+          snippets: loaded,
+          packCount: status.source.item_count ?? status.expected_count ?? 0,
+        };
+        groupMap.set(name, group);
+        groups.push(group);
+      }
+    }
 
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+    return groups;
+  }, [snippets, search, emojiPackStatus, kaomojiPackStatus, packSnippets]);
+
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
+    try {
+      const stored = localStorage.getItem("dispatch_collapsed_groups");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) return new Set<string>(parsed);
+      }
+    } catch {
+      // ignore corrupt data
+    }
+    // Auto-collapse large packs by default
+    return new Set<string>(PACK_GROUPS);
+  });
+
+  // Persist collapsed groups to localStorage
+  useEffect(() => {
+    localStorage.setItem(
+      "dispatch_collapsed_groups",
+      JSON.stringify([...collapsedGroups])
+    );
+  }, [collapsedGroups]);
+
+  // Group sub-search state
+  const [groupSearchOpen, setGroupSearchOpen] = useState<Set<string>>(new Set());
+  const [groupSearchText, setGroupSearchText] = useState<Record<string, string>>({});
+  const [packSearchResults, setPackSearchResults] = useState<Record<string, Snippet[]>>({});
+  const [packSearchLoading, setPackSearchLoading] = useState<Record<string, boolean>>({});
+  const packSearchTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  const toggleGroupSearch = useCallback((groupName: string) => {
+    setGroupSearchOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupName)) {
+        next.delete(groupName);
+        // Clear search text when closing
+        setGroupSearchText((t) => { const n = { ...t }; delete n[groupName]; return n; });
+      } else {
+        next.add(groupName);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleGroupSearchChange = useCallback((groupName: string, sourceId: string | null, isPack: boolean, text: string) => {
+    setGroupSearchText((prev) => ({ ...prev, [groupName]: text }));
+    if (isPack && sourceId) {
+      // Debounced server-side search for pack groups
+      if (packSearchTimers.current[groupName]) {
+        clearTimeout(packSearchTimers.current[groupName]);
+      }
+      if (!text.trim()) {
+        setPackSearchResults((prev) => { const n = { ...prev }; delete n[groupName]; return n; });
+        setPackSearchLoading((prev) => ({ ...prev, [groupName]: false }));
+        return;
+      }
+      setPackSearchLoading((prev) => ({ ...prev, [groupName]: true }));
+      packSearchTimers.current[groupName] = setTimeout(async () => {
+        try {
+          const data = await listSnippets(text.trim(), undefined, sourceId, 200);
+          setPackSearchResults((prev) => ({ ...prev, [groupName]: data }));
+        } catch (err) {
+          console.error("Pack search failed:", err);
+        } finally {
+          setPackSearchLoading((prev) => ({ ...prev, [groupName]: false }));
+        }
+      }, 250);
+    }
+  }, []);
+
+  // Category browser state
+  const [activePackCategory, setActivePackCategory] = useState<Record<string, string | null>>({});
+  const [categorySnippets, setCategorySnippets] = useState<Record<string, Snippet[]>>({});
+  const [categoryLoading, setCategoryLoading] = useState<Record<string, boolean>>({});
+
+  const loadCategorySnippets = useCallback(async (sourceId: string, categoryTag: string) => {
+    const cacheKey = `${sourceId}:${categoryTag}`;
+    setActivePackCategory((prev) => ({ ...prev, [sourceId]: categoryTag }));
+    if (categorySnippets[cacheKey]) return;
+    setCategoryLoading((prev) => ({ ...prev, [cacheKey]: true }));
+    try {
+      const data = await listSnippets(undefined, categoryTag, sourceId);
+      setCategorySnippets((prev) => ({ ...prev, [cacheKey]: data }));
+    } catch (err) {
+      console.error("Failed to load category snippets:", err);
+    } finally {
+      setCategoryLoading((prev) => ({ ...prev, [cacheKey]: false }));
+    }
+  }, [categorySnippets]);
+
+  // Fetch favorites / recents when those tabs are selected
+  useEffect(() => {
+    if (listTab === "favorites") {
+      listFavoriteSnippets()
+        .then(setFavoriteSnippets)
+        .catch((err) => console.error("Failed to load favorites:", err));
+    } else if (listTab === "recent") {
+      listRecentSnippets(20)
+        .then(setRecentSnippets)
+        .catch((err) => console.error("Failed to load recents:", err));
+    }
+  }, [listTab]);
 
   const toggleGroup = useCallback((groupName: string) => {
     setCollapsedGroups((prev) => {
@@ -156,8 +376,8 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
   const handleBackToList = useCallback(() => {
     setView("list");
     setEditingSnippet(null);
-    refresh();
-  }, [refresh]);
+    refreshAll();
+  }, [refreshAll]);
 
   if (view === "edit") {
     return (
@@ -203,7 +423,8 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
       <div className="shrink-0"><LiveExpansionToggle /></div>
 
       <div className="shrink-0">
-        <EmojiPackCard onChanged={refresh} />
+        <EmojiPackCard onChanged={refreshAll} />
+        <KaomojiPackCard onChanged={refreshAll} />
       </div>
 
       {/* Source filter chip */}
@@ -221,12 +442,63 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
         </div>
       )}
 
+      {/* Tab bar: All / Favorites / Recent (§4.2) */}
+      <div className="flex items-center gap-1 px-4 py-1.5 border-b border-border-subtle bg-surface-overlay/30 shrink-0">
+        {(["all", "favorites", "recent"] as const).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setListTab(tab)}
+            className={`text-[11px] px-2.5 py-1 rounded-md transition-colors ${
+              listTab === tab
+                ? "bg-accent/15 text-accent font-medium"
+                : "text-text-tertiary hover:text-text-secondary"
+            }`}
+          >
+            {tab === "all" ? "All" : tab === "favorites" ? "\u2605 Favorites" : "\u25F7 Recent"}
+          </button>
+        ))}
+      </div>
+
       {/* Snippet list */}
       <div className="flex-1 overflow-y-auto">
         {loading ? (
           <div className="flex items-center justify-center h-32">
             <p className="text-sm text-text-tertiary">Loading snippets...</p>
           </div>
+        ) : listTab === "favorites" ? (
+          favoriteSnippets.length === 0 ? (
+            <div className="flex items-center justify-center h-32">
+              <p className="text-sm text-text-tertiary">No favorite snippets yet.</p>
+            </div>
+          ) : (
+            <div>
+              {favoriteSnippets.map((snippet) => (
+                <SnippetRow
+                  key={snippet.id}
+                  snippet={snippet}
+                  onClick={() => handleOpenEdit(snippet)}
+                  onRefresh={refreshAll}
+                />
+              ))}
+            </div>
+          )
+        ) : listTab === "recent" ? (
+          recentSnippets.length === 0 ? (
+            <div className="flex items-center justify-center h-32">
+              <p className="text-sm text-text-tertiary">No recently used snippets.</p>
+            </div>
+          ) : (
+            <div>
+              {recentSnippets.map((snippet) => (
+                <SnippetRow
+                  key={snippet.id}
+                  snippet={snippet}
+                  onClick={() => handleOpenEdit(snippet)}
+                  onRefresh={refreshAll}
+                />
+              ))}
+            </div>
+          )
         ) : snippets.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-32 gap-2">
             <p className="text-sm text-text-tertiary">No snippets found.</p>
@@ -255,25 +527,94 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
                 </button>
               </div>
             )}
-            {groupedSnippets.map((group) => (
-              <div key={group.name}>
-                <SourceGroupHeader
-                  name={group.name}
-                  count={group.snippets.length}
-                  isCollapsed={collapsedGroups.has(group.name)}
-                  onToggle={() => toggleGroup(group.name)}
-                />
-                {!collapsedGroups.has(group.name) &&
-                  group.snippets.map((snippet) => (
-                    <SnippetRow
-                      key={snippet.id}
-                      snippet={snippet}
-                      onClick={() => handleOpenEdit(snippet)}
-                      onRefresh={refresh}
+            {groupedSnippets.map((group) => {
+              const isPack = PACK_GROUPS.includes(group.name);
+              const isExpanded = !collapsedGroups.has(group.name);
+              const searchText = groupSearchText[group.name] ?? "";
+              const hasPackSearch = isPack && searchText.trim().length > 0;
+
+              // Client-side filter for non-pack groups
+              const filteredSnippets = !isPack && searchText.trim()
+                ? group.snippets.filter((s) => {
+                    const q = searchText.trim().toLowerCase();
+                    return (
+                      s.trigger.toLowerCase().includes(q) ||
+                      (s.label ?? "").toLowerCase().includes(q) ||
+                      s.body.toLowerCase().includes(q)
+                    );
+                  })
+                : group.snippets;
+
+              return (
+                <div key={group.name}>
+                  <SourceGroupHeader
+                    name={group.name}
+                    count={group.packCount ?? group.snippets.length}
+                    isCollapsed={!isExpanded}
+                    onToggle={() => toggleGroup(group.name)}
+                    searchOpen={groupSearchOpen.has(group.name)}
+                    onToggleSearch={() => toggleGroupSearch(group.name)}
+                  />
+                  {isExpanded && groupSearchOpen.has(group.name) && (
+                    <GroupSearchBar
+                      value={searchText}
+                      onChange={(v) => handleGroupSearchChange(group.name, group.sourceId, isPack, v)}
+                      placeholder={isPack ? `Search ${group.name}...` : "Filter snippets..."}
                     />
-                  ))}
-              </div>
-            ))}
+                  )}
+                  {isExpanded && (
+                    isPack && group.sourceId ? (
+                      hasPackSearch ? (
+                        packSearchLoading[group.name] ? (
+                          <div className="flex items-center justify-center py-6">
+                            <p className="text-xs text-text-tertiary">Searching...</p>
+                          </div>
+                        ) : (packSearchResults[group.name] ?? []).length === 0 ? (
+                          <div className="flex items-center justify-center py-6">
+                            <p className="text-xs text-text-tertiary">No results for "{searchText.trim()}"</p>
+                          </div>
+                        ) : (
+                          (packSearchResults[group.name] ?? []).map((snippet) => (
+                            <SnippetRow
+                              key={snippet.id}
+                              snippet={snippet}
+                              onClick={() => handleOpenEdit(snippet)}
+                              onRefresh={refreshAll}
+                            />
+                          ))
+                        )
+                      ) : (
+                        <PackCategoryBrowser
+                          packName={group.name}
+                          sourceId={group.sourceId}
+                          activeCategory={activePackCategory[group.sourceId] ?? null}
+                          categorySnippets={categorySnippets}
+                          categoryLoading={categoryLoading}
+                          onSelectCategory={loadCategorySnippets}
+                          onEditSnippet={handleOpenEdit}
+                          onRefresh={refreshAll}
+                        />
+                      )
+                    ) : (
+                      filteredSnippets.length === 0 && searchText.trim() ? (
+                        <div className="flex items-center justify-center py-6">
+                          <p className="text-xs text-text-tertiary">No results for "{searchText.trim()}"</p>
+                        </div>
+                      ) : (
+                        filteredSnippets.map((snippet) => (
+                          <SnippetRow
+                            key={snippet.id}
+                            snippet={snippet}
+                            onClick={() => handleOpenEdit(snippet)}
+                            onRefresh={refreshAll}
+                          />
+                        ))
+                      )
+                    )
+                  )}
+                </div>
+              );
+            })}
           </div>
         ) : (
           <div>
@@ -282,7 +623,7 @@ export function SnippetManager({ onBack }: SnippetManagerProps) {
                 key={snippet.id}
                 snippet={snippet}
                 onClick={() => handleOpenEdit(snippet)}
-                onRefresh={refresh}
+                onRefresh={refreshAll}
               />
             ))}
           </div>
@@ -441,6 +782,290 @@ function EmojiPackCard({ onChanged }: { onChanged: () => Promise<void> | void })
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// KaomojiPackCard
+// ---------------------------------------------------------------------------
+
+function KaomojiPackCard({ onChanged }: { onChanged: () => Promise<void> | void }) {
+  const [status, setStatus] = useState<EmojiPackStatus | null>(null);
+  const [busy, setBusy] = useState<"install" | "update" | "remove" | "toggle" | null>(null);
+  const { showToast } = useToast();
+
+  const refreshStatus = useCallback(async () => {
+    try {
+      const next = await getKaomojiPackStatus();
+      setStatus(next);
+    } catch (err) {
+      console.error("Failed to load kaomoji pack status:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshStatus();
+  }, [refreshStatus]);
+
+  const handleInstall = useCallback(async () => {
+    setBusy("install");
+    try {
+      const result = await installKaomojiPack();
+      showToast(`Installed Kaomoji Pack — +${result.added} ~${result.updated} -${result.removed}`);
+      await refreshStatus();
+      await onChanged();
+    } catch (err) {
+      console.error("Kaomoji pack install failed:", err);
+      showToast(`Failed to install Kaomoji Pack: ${err}`);
+    } finally {
+      setBusy(null);
+    }
+  }, [onChanged, refreshStatus, showToast]);
+
+  const handleUpdate = useCallback(async () => {
+    setBusy("update");
+    try {
+      const result = await updateKaomojiPack();
+      showToast(`Updated Kaomoji Pack — +${result.added} ~${result.updated} -${result.removed}`);
+      await refreshStatus();
+      await onChanged();
+    } catch (err) {
+      console.error("Kaomoji pack update failed:", err);
+      showToast(`Failed to update Kaomoji Pack: ${err}`);
+    } finally {
+      setBusy(null);
+    }
+  }, [onChanged, refreshStatus, showToast]);
+
+  const handleRemove = useCallback(async () => {
+    setBusy("remove");
+    try {
+      await uninstallKaomojiPack();
+      showToast("Removed Kaomoji Pack");
+      await refreshStatus();
+      await onChanged();
+    } catch (err) {
+      console.error("Kaomoji pack remove failed:", err);
+      showToast(`Failed to remove Kaomoji Pack: ${err}`);
+    } finally {
+      setBusy(null);
+    }
+  }, [onChanged, refreshStatus, showToast]);
+
+  const handleToggle = useCallback(async () => {
+    if (!status?.source) return;
+    setBusy("toggle");
+    try {
+      await updateSnippetSource(status.source.id, {
+        isEnabled: status.source.is_enabled === 0,
+      });
+      await refreshTriggers();
+      showToast(status.source.is_enabled === 1 ? "Kaomoji Pack disabled" : "Kaomoji Pack enabled");
+      await refreshStatus();
+      await onChanged();
+    } catch (err) {
+      console.error("Kaomoji pack toggle failed:", err);
+      showToast(`Failed to update Kaomoji Pack: ${err}`);
+    } finally {
+      setBusy(null);
+    }
+  }, [onChanged, refreshStatus, showToast, status]);
+
+  const installed = status?.installed ?? false;
+  const enabled = status?.source?.is_enabled === 1;
+  const count = status?.source?.item_count ?? status?.expected_count ?? null;
+  const version = status?.source?.source_version ?? status?.version ?? "Latest";
+
+  return (
+    <div className="px-4 py-3 border-b border-border-subtle bg-purple-500/5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-text-primary">Kaomoji Pack</span>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${
+              installed
+                ? enabled
+                  ? "border-success/30 text-success bg-success/10"
+                  : "border-warning/30 text-warning bg-warning/10"
+                : "border-border-subtle text-text-tertiary bg-surface-overlay/60"
+            }`}>
+              {installed ? (enabled ? "Installed" : "Disabled") : "Not installed"}
+            </span>
+          </div>
+          <p className="mt-1 text-[11px] text-text-secondary">
+            Text faces like <code className="font-mono text-accent">:shrug:</code>, <code className="font-mono text-accent">:tableflip:</code>, <code className="font-mono text-accent">:lenny:</code>
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-text-tertiary">
+            <span>Version: {version}</span>
+            <span>Count: {count ?? "..."}</span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          {!installed ? (
+            <button
+              onClick={handleInstall}
+              disabled={busy !== null}
+              className="text-[11px] text-white bg-accent hover:bg-accent-hover transition-colors px-2.5 py-1 rounded-md disabled:opacity-50"
+            >
+              {busy === "install" ? "Installing..." : "Install"}
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={handleUpdate}
+                disabled={busy !== null}
+                className="text-[11px] text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50"
+              >
+                {busy === "update" ? "Updating..." : "Update"}
+              </button>
+              <button
+                onClick={handleToggle}
+                disabled={busy !== null}
+                className="text-[11px] text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50"
+              >
+                {busy === "toggle" ? "Saving..." : enabled ? "Disable" : "Enable"}
+              </button>
+              <button
+                onClick={handleRemove}
+                disabled={busy !== null}
+                className="text-[11px] text-error hover:text-red-400 transition-colors disabled:opacity-50"
+              >
+                {busy === "remove" ? "Removing..." : "Remove"}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// GroupSearchBar
+// ---------------------------------------------------------------------------
+
+function GroupSearchBar({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  return (
+    <div className="flex items-center gap-2 px-4 py-1.5 border-b border-border-subtle bg-surface-overlay/20">
+      <SearchIcon />
+      <input
+        ref={inputRef}
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder ?? "Search in group..."}
+        className="flex-1 bg-transparent text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none"
+      />
+      {value && (
+        <button
+          onClick={() => onChange("")}
+          className="text-text-tertiary hover:text-text-primary transition-colors"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// PackCategoryBrowser
+// ---------------------------------------------------------------------------
+
+function PackCategoryBrowser({
+  packName,
+  sourceId,
+  activeCategory,
+  categorySnippets,
+  categoryLoading,
+  onSelectCategory,
+  onEditSnippet,
+  onRefresh,
+}: {
+  packName: string;
+  sourceId: string;
+  activeCategory: string | null;
+  categorySnippets: Record<string, Snippet[]>;
+  categoryLoading: Record<string, boolean>;
+  onSelectCategory: (sourceId: string, categoryTag: string) => void;
+  onEditSnippet: (snippet: Snippet) => void;
+  onRefresh: () => void;
+}) {
+  const categories = PACK_CATEGORIES[packName] ?? [];
+  const cacheKey = activeCategory ? `${sourceId}:${activeCategory}` : null;
+  const snippets = cacheKey ? categorySnippets[cacheKey] ?? [] : [];
+  const isLoading = cacheKey ? categoryLoading[cacheKey] ?? false : false;
+  const activeCat = categories.find((c) => c.tag === activeCategory);
+
+  return (
+    <div>
+      {/* Category icon strip */}
+      <div className="flex items-center gap-1 px-4 py-2 border-b border-border-subtle bg-surface-overlay/30 overflow-x-auto">
+        {categories.map((cat) => (
+          <button
+            key={cat.tag}
+            onClick={() => onSelectCategory(sourceId, cat.tag)}
+            className={`flex items-center justify-center w-8 h-8 rounded-lg text-sm shrink-0 transition-all ${
+              activeCategory === cat.tag
+                ? "bg-accent/15 ring-1.5 ring-accent/40"
+                : "hover:bg-surface-raised"
+            }`}
+            title={cat.label}
+          >
+            {cat.icon}
+          </button>
+        ))}
+      </div>
+
+      {/* Active category content */}
+      {activeCategory === null ? (
+        <div className="flex items-center justify-center py-6">
+          <p className="text-xs text-text-tertiary">Select a category above</p>
+        </div>
+      ) : isLoading ? (
+        <div className="flex items-center justify-center py-6">
+          <p className="text-xs text-text-tertiary">Loading {activeCat?.label ?? activeCategory}...</p>
+        </div>
+      ) : (
+        <>
+          {activeCat && (
+            <div className="px-4 py-1.5 border-b border-border-subtle">
+              <span className="text-[11px] font-medium text-text-secondary">
+                {activeCat.label}
+              </span>
+              <span className="text-[10px] text-text-tertiary ml-1.5">
+                ({snippets.length})
+              </span>
+            </div>
+          )}
+          {snippets.map((snippet) => (
+            <SnippetRow
+              key={snippet.id}
+              snippet={snippet}
+              onClick={() => onEditSnippet(snippet)}
+              onRefresh={onRefresh}
+            />
+          ))}
+        </>
+      )}
     </div>
   );
 }
@@ -1568,6 +2193,25 @@ function FieldLabel({ label, value }: { label: string; value: string }) {
 // ---------------------------------------------------------------------------
 // Icons
 // ---------------------------------------------------------------------------
+
+function SearchIcon() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="shrink-0"
+    >
+      <circle cx="11" cy="11" r="8" />
+      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+    </svg>
+  );
+}
 
 function PlayIcon() {
   return (

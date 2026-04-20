@@ -1,7 +1,13 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { expandSnippet, listFavoriteSnippets, listRecentSnippets, listSnippets } from "../lib/snippets";
+import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { isEmojiSnippet, parseTags } from "../lib/snippetDisplay";
 import type { Snippet, SnippetVariable } from "../lib/types";
+
+function isEmojiOrKaomoji(snippet: { tags: string | null }): boolean {
+  const tags = parseTags(snippet.tags);
+  return tags.includes("emoji") || tags.includes("kaomoji");
+}
 
 interface CommandPaletteProps {
   onClose: () => void;
@@ -64,19 +70,20 @@ export function CommandPalette({
 
   // The actual search query in expansion mode (without the prefix)
   const expansionQuery = mode === "expansions" ? search : "";
+  const debouncedExpansionQuery = useDebouncedValue(expansionQuery, 250);
 
   // Auto-focus input on mount
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
-  // Fetch snippets when in expansion mode
+  // Fetch snippets when in expansion mode (debounced)
   useEffect(() => {
     if (mode !== "expansions") return;
-    listSnippets(expansionQuery || undefined)
+    listSnippets(debouncedExpansionQuery || undefined)
       .then(setSnippets)
       .catch((err) => console.error("Failed to fetch snippets:", err));
-  }, [mode, expansionQuery]);
+  }, [mode, debouncedExpansionQuery]);
 
   // Fetch recents and favorites on expansion mode entry
   useEffect(() => {
@@ -106,6 +113,14 @@ export function CommandPalette({
     [formVariables]
   );
 
+  // Colon-prefix emoji boost: filter to emoji/kaomoji only when expansionQuery starts with ":"
+  const filteredSnippets = useMemo(() => {
+    if (expansionQuery.startsWith(":")) {
+      return snippets.filter(isEmojiOrKaomoji);
+    }
+    return snippets;
+  }, [snippets, expansionQuery]);
+
   // Command mode filtering
   const filteredCommands = search
     ? COMMANDS.filter((c) =>
@@ -116,7 +131,7 @@ export function CommandPalette({
   // Build sectioned list for expansion mode (empty query)
   const expansionItems = useMemo(() => {
     if (mode !== "expansions") return [];
-    if (expansionQuery) return snippets;
+    if (expansionQuery) return filteredSnippets;
 
     // Deduplicate: favorites first, then recents (excluding favorites), then all (excluding both)
     const favIds = new Set(favoriteSnippets.map((s) => s.id));
@@ -136,16 +151,16 @@ export function CommandPalette({
     }
 
     return sections;
-  }, [mode, expansionQuery, snippets, recentSnippets, favoriteSnippets]);
+  }, [mode, expansionQuery, filteredSnippets, snippets, recentSnippets, favoriteSnippets]);
 
   // Flat list for keyboard navigation in expansion mode (empty query with sections)
   const flatExpansionItems = useMemo(() => {
-    if (expansionQuery) return snippets;
+    if (expansionQuery) return filteredSnippets;
     if (!Array.isArray(expansionItems)) return [];
     return (expansionItems as { header: string; items: Snippet[] }[]).flatMap(
       (s) => s.items
     );
-  }, [expansionQuery, expansionItems, snippets]);
+  }, [expansionQuery, expansionItems, filteredSnippets]);
 
   const totalItems =
     mode === "commands" ? filteredCommands.length : flatExpansionItems.length;
@@ -391,21 +406,30 @@ export function CommandPalette({
           <div ref={listRef} className="max-h-[300px] overflow-y-auto">
             {expansionQuery ? (
               // Flat search results
-              snippets.length === 0 ? (
+              filteredSnippets.length === 0 ? (
                 <div className="px-4 py-6 text-center">
                   <p className="text-xs text-text-tertiary">
                     No matching snippets.
                   </p>
                 </div>
               ) : (
-                snippets.map((snippet, i) => (
-                  <SnippetRow
-                    key={snippet.id}
-                    snippet={snippet}
-                    selected={i === selectedIndex}
-                    onClick={() => handleSnippetSelect(snippet)}
-                  />
-                ))
+                <>
+                  {filteredSnippets.slice(0, 100).map((snippet, i) => (
+                    <SnippetRow
+                      key={snippet.id}
+                      snippet={snippet}
+                      selected={i === selectedIndex}
+                      onClick={() => handleSnippetSelect(snippet)}
+                    />
+                  ))}
+                  {filteredSnippets.length > 100 && (
+                    <div className="px-4 py-2 text-center">
+                      <p className="text-[11px] text-text-tertiary">
+                        {filteredSnippets.length - 100} more results — refine your search
+                      </p>
+                    </div>
+                  )}
+                </>
               )
             ) : (
               // Sectioned: favorites, recent, all

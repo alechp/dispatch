@@ -95,6 +95,36 @@ pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         let _ = sqlx::query(stmt).execute(pool).await;
     }
 
+    // Migration 014: notification accounts, routing rules
+    sqlx::raw_sql(include_str!("../migrations/014_notification_accounts.sql"))
+        .execute(pool)
+        .await?;
+
+    // Add provider columns to notifications table
+    for stmt in [
+        "ALTER TABLE notifications ADD COLUMN account_id TEXT REFERENCES notification_accounts(id) ON DELETE SET NULL",
+        "ALTER TABLE notifications ADD COLUMN provider TEXT",
+        "ALTER TABLE notifications ADD COLUMN provider_message_id TEXT",
+        "ALTER TABLE notifications ADD COLUMN provider_channel_name TEXT",
+        "ALTER TABLE notifications ADD COLUMN provider_channel_id TEXT",
+        "ALTER TABLE notifications ADD COLUMN provider_avatar_url TEXT",
+        "ALTER TABLE notifications ADD COLUMN provider_author TEXT",
+    ] {
+        if let Err(e) = sqlx::query(stmt).execute(pool).await {
+            if !e.to_string().contains("duplicate column") {
+                return Err(e);
+            }
+        }
+    }
+
+    // Indexes for new notification columns
+    for stmt in [
+        "CREATE INDEX IF NOT EXISTS idx_notifications_account ON notifications(account_id)",
+        "CREATE INDEX IF NOT EXISTS idx_notifications_provider ON notifications(provider)",
+    ] {
+        let _ = sqlx::query(stmt).execute(pool).await;
+    }
+
     Ok(())
 }
 
@@ -567,29 +597,12 @@ pub async fn get_notification_by_id(
     pool: &SqlitePool,
     id: &str,
 ) -> Result<Option<crate::models::Notification>, sqlx::Error> {
-    let row: Option<(String, String, String, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, i32, String, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT id, source, event_type, title, body, metadata, project, tmux_session, tmux_window, tmux_pane, is_read, created_at, read_at, yapture_task_id FROM notifications WHERE id = ?"
+    sqlx::query_as::<_, crate::models::Notification>(
+        "SELECT * FROM notifications WHERE id = ?"
     )
     .bind(id)
     .fetch_optional(pool)
-    .await?;
-
-    Ok(row.map(|r| crate::models::Notification {
-        id: r.0,
-        source: r.1,
-        event_type: r.2,
-        title: r.3,
-        body: r.4,
-        metadata: r.5,
-        project: r.6,
-        tmux_session: r.7,
-        tmux_window: r.8,
-        tmux_pane: r.9,
-        is_read: r.10,
-        created_at: r.11,
-        read_at: r.12,
-        yapture_task_id: r.13,
-    }))
+    .await
 }
 
 pub async fn set_yapture_task_id(
@@ -795,6 +808,7 @@ pub async fn list_snippets(
     search: Option<&str>,
     tag: Option<&str>,
     source_id: Option<&str>,
+    limit: Option<i64>,
 ) -> Result<Vec<crate::models::Snippet>, sqlx::Error> {
     let mut sql = format!("SELECT {} FROM snippets s LEFT JOIN snippet_sources ss ON s.source_id = ss.id WHERE s.is_enabled = 1 AND (s.source_id IS NULL OR ss.is_enabled = 1 OR ss.is_enabled IS NULL)", SNIPPET_COLS_WITH_SOURCE);
     let mut args: Vec<String> = Vec::new();
@@ -802,6 +816,9 @@ pub async fn list_snippets(
     if let Some(sid) = source_id {
         sql.push_str(" AND s.source_id = ?");
         args.push(sid.to_string());
+    } else if search.is_none() {
+        // Exclude managed pack sources from default load (no search, no source filter)
+        sql.push_str(" AND (ss.managed_key IS NULL OR s.source_id IS NULL)");
     }
     if let Some(s) = search {
         sql.push_str(" AND (s.trigger LIKE ? OR s.label LIKE ? OR s.body LIKE ? OR s.tags LIKE ?)");
@@ -816,6 +833,12 @@ pub async fn list_snippets(
         args.push(format!("%\"{}\"%", t));
     }
     sql.push_str(" ORDER BY s.use_count DESC, s.updated_at DESC");
+
+    // Apply limit: use provided limit, or default to 200 when searching
+    let effective_limit = limit.or(if search.is_some() { Some(200) } else { None });
+    if let Some(lim) = effective_limit {
+        sql.push_str(&format!(" LIMIT {}", lim));
+    }
 
     let mut query = sqlx::query_as::<_, SnippetRowWithSource>(&sql);
     for arg in &args {
@@ -1272,6 +1295,407 @@ pub async fn set_setting(pool: &SqlitePool, key: &str, value: &str) -> Result<()
     .execute(pool)
     .await?;
     Ok(())
+}
+
+// --- Notification Account functions ---
+
+pub async fn create_notification_account(
+    pool: &SqlitePool,
+    provider: &str,
+    account_label: &str,
+    access_token: &str,
+    refresh_token: Option<&str>,
+    token_expires_at: Option<&str>,
+    scopes: Option<&str>,
+    provider_user_id: Option<&str>,
+    provider_username: Option<&str>,
+    provider_avatar_url: Option<&str>,
+    provider_team_id: Option<&str>,
+    provider_team_name: Option<&str>,
+) -> Result<crate::models::NotificationAccount, sqlx::Error> {
+    let id = Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    sqlx::query(
+        "INSERT INTO notification_accounts (id, provider, account_label, access_token, refresh_token, token_expires_at, scopes, provider_user_id, provider_username, provider_avatar_url, provider_team_id, provider_team_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(&id).bind(provider).bind(account_label)
+    .bind(access_token).bind(refresh_token).bind(token_expires_at).bind(scopes)
+    .bind(provider_user_id).bind(provider_username).bind(provider_avatar_url)
+    .bind(provider_team_id).bind(provider_team_name)
+    .bind(&now).bind(&now)
+    .execute(pool).await?;
+
+    get_notification_account(pool, &id).await.map(|opt| opt.unwrap())
+}
+
+pub async fn get_notification_account(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<Option<crate::models::NotificationAccount>, sqlx::Error> {
+    sqlx::query_as::<_, crate::models::NotificationAccount>(
+        "SELECT * FROM notification_accounts WHERE id = ?"
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn list_notification_accounts(
+    pool: &SqlitePool,
+    provider: Option<&str>,
+) -> Result<Vec<crate::models::NotificationAccount>, sqlx::Error> {
+    if let Some(p) = provider {
+        sqlx::query_as::<_, crate::models::NotificationAccount>(
+            "SELECT * FROM notification_accounts WHERE provider = ? ORDER BY created_at ASC"
+        )
+        .bind(p)
+        .fetch_all(pool)
+        .await
+    } else {
+        sqlx::query_as::<_, crate::models::NotificationAccount>(
+            "SELECT * FROM notification_accounts ORDER BY created_at ASC"
+        )
+        .fetch_all(pool)
+        .await
+    }
+}
+
+pub async fn update_notification_account_tokens(
+    pool: &SqlitePool,
+    id: &str,
+    access_token: &str,
+    refresh_token: Option<&str>,
+    token_expires_at: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE notification_accounts SET access_token = ?, refresh_token = ?, token_expires_at = ?, updated_at = ? WHERE id = ?"
+    )
+    .bind(access_token).bind(refresh_token).bind(token_expires_at).bind(&now).bind(id)
+    .execute(pool).await?;
+    Ok(())
+}
+
+pub async fn update_notification_account_label(
+    pool: &SqlitePool,
+    id: &str,
+    label: &str,
+) -> Result<(), sqlx::Error> {
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query("UPDATE notification_accounts SET account_label = ?, updated_at = ? WHERE id = ?")
+        .bind(label).bind(&now).bind(id)
+        .execute(pool).await?;
+    Ok(())
+}
+
+pub async fn toggle_notification_account(
+    pool: &SqlitePool,
+    id: &str,
+    enabled: bool,
+) -> Result<(), sqlx::Error> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let val: i32 = if enabled { 1 } else { 0 };
+    sqlx::query("UPDATE notification_accounts SET is_enabled = ?, updated_at = ? WHERE id = ?")
+        .bind(val).bind(&now).bind(id)
+        .execute(pool).await?;
+    Ok(())
+}
+
+pub async fn set_monitored_channels(
+    pool: &SqlitePool,
+    id: &str,
+    channel_ids: &[String],
+) -> Result<(), sqlx::Error> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let json = serde_json::to_string(channel_ids).unwrap_or_else(|_| "[]".to_string());
+    sqlx::query("UPDATE notification_accounts SET sync_channels = ?, updated_at = ? WHERE id = ?")
+        .bind(&json).bind(&now).bind(id)
+        .execute(pool).await?;
+    Ok(())
+}
+
+pub async fn update_account_sync_cursor(
+    pool: &SqlitePool,
+    id: &str,
+    cursor: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query("UPDATE notification_accounts SET sync_cursor = ?, last_sync_at = ?, updated_at = ? WHERE id = ?")
+        .bind(cursor).bind(&now).bind(&now).bind(id)
+        .execute(pool).await?;
+    Ok(())
+}
+
+pub async fn delete_notification_account(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM notification_accounts WHERE id = ?")
+        .bind(id)
+        .execute(pool).await?;
+    Ok(result.rows_affected() > 0)
+}
+
+// --- Account Screen Toggle functions ---
+
+pub async fn get_account_screen_toggles(
+    pool: &SqlitePool,
+    account_id: &str,
+) -> Result<Vec<(String, bool)>, sqlx::Error> {
+    let rows: Vec<(String, i32)> = sqlx::query_as(
+        "SELECT screen_key, is_enabled FROM notification_account_screen_toggles WHERE account_id = ?"
+    )
+    .bind(account_id)
+    .fetch_all(pool).await?;
+    Ok(rows.into_iter().map(|(k, v)| (k, v == 1)).collect())
+}
+
+pub async fn set_account_screen_toggle(
+    pool: &SqlitePool,
+    account_id: &str,
+    screen_key: &str,
+    enabled: bool,
+) -> Result<(), sqlx::Error> {
+    let val: i32 = if enabled { 1 } else { 0 };
+    sqlx::query(
+        "INSERT INTO notification_account_screen_toggles (account_id, screen_key, is_enabled) VALUES (?, ?, ?) ON CONFLICT(account_id, screen_key) DO UPDATE SET is_enabled = excluded.is_enabled"
+    )
+    .bind(account_id).bind(screen_key).bind(val)
+    .execute(pool).await?;
+    Ok(())
+}
+
+pub async fn init_default_screen_toggles(
+    pool: &SqlitePool,
+    account_id: &str,
+) -> Result<(), sqlx::Error> {
+    for screen in &["feed/notifications", "feed/sessions", "telemetry", "expander", "settings"] {
+        set_account_screen_toggle(pool, account_id, screen, true).await?;
+    }
+    Ok(())
+}
+
+pub async fn get_disabled_accounts_for_screen(
+    pool: &SqlitePool,
+    screen_key: &str,
+) -> Result<Vec<String>, sqlx::Error> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT account_id FROM notification_account_screen_toggles WHERE screen_key = ? AND is_enabled = 0"
+    )
+    .bind(screen_key)
+    .fetch_all(pool).await?;
+    Ok(rows.into_iter().map(|r| r.0).collect())
+}
+
+// --- Routing Rule functions ---
+
+pub async fn create_routing_rule(
+    pool: &SqlitePool,
+    name: &str,
+    source_type: &str,
+    source_value: Option<&str>,
+    destination_type: &str,
+    destination_config: &str,
+    template: Option<&str>,
+    filter_event_types: Option<&str>,
+    filter_keywords: Option<&str>,
+    priority: i32,
+    stop_on_match: bool,
+    chain_rule_id: Option<&str>,
+) -> Result<crate::models::RoutingRule, sqlx::Error> {
+    let id = Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    let stop_val: i32 = if stop_on_match { 1 } else { 0 };
+
+    sqlx::query(
+        "INSERT INTO notification_routing_rules (id, name, source_type, source_value, destination_type, destination_config, template, filter_event_types, filter_keywords, priority, stop_on_match, chain_rule_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(&id).bind(name).bind(source_type).bind(source_value)
+    .bind(destination_type).bind(destination_config)
+    .bind(template).bind(filter_event_types).bind(filter_keywords)
+    .bind(priority).bind(stop_val).bind(chain_rule_id)
+    .bind(&now).bind(&now)
+    .execute(pool).await?;
+
+    get_routing_rule(pool, &id).await.map(|opt| opt.unwrap())
+}
+
+pub async fn get_routing_rule(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<Option<crate::models::RoutingRule>, sqlx::Error> {
+    sqlx::query_as::<_, crate::models::RoutingRule>(
+        "SELECT * FROM notification_routing_rules WHERE id = ?"
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn list_routing_rules(
+    pool: &SqlitePool,
+) -> Result<Vec<crate::models::RoutingRule>, sqlx::Error> {
+    sqlx::query_as::<_, crate::models::RoutingRule>(
+        "SELECT * FROM notification_routing_rules ORDER BY priority DESC, created_at ASC"
+    )
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn list_enabled_routing_rules(
+    pool: &SqlitePool,
+) -> Result<Vec<crate::models::RoutingRule>, sqlx::Error> {
+    sqlx::query_as::<_, crate::models::RoutingRule>(
+        "SELECT * FROM notification_routing_rules WHERE is_enabled = 1 ORDER BY priority DESC, created_at ASC"
+    )
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn update_routing_rule(
+    pool: &SqlitePool,
+    id: &str,
+    name: Option<&str>,
+    source_type: Option<&str>,
+    source_value: Option<Option<&str>>,
+    destination_type: Option<&str>,
+    destination_config: Option<&str>,
+    template: Option<Option<&str>>,
+    filter_event_types: Option<Option<&str>>,
+    filter_keywords: Option<Option<&str>>,
+    priority: Option<i32>,
+    stop_on_match: Option<bool>,
+    chain_rule_id: Option<Option<&str>>,
+) -> Result<(), sqlx::Error> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut sets = vec!["updated_at = ?".to_string()];
+    let mut args: Vec<Option<String>> = vec![Some(now)];
+
+    if let Some(v) = name { sets.push("name = ?".into()); args.push(Some(v.to_string())); }
+    if let Some(v) = source_type { sets.push("source_type = ?".into()); args.push(Some(v.to_string())); }
+    if let Some(v) = source_value { sets.push("source_value = ?".into()); args.push(v.map(|s| s.to_string())); }
+    if let Some(v) = destination_type { sets.push("destination_type = ?".into()); args.push(Some(v.to_string())); }
+    if let Some(v) = destination_config { sets.push("destination_config = ?".into()); args.push(Some(v.to_string())); }
+    if let Some(v) = template { sets.push("template = ?".into()); args.push(v.map(|s| s.to_string())); }
+    if let Some(v) = filter_event_types { sets.push("filter_event_types = ?".into()); args.push(v.map(|s| s.to_string())); }
+    if let Some(v) = filter_keywords { sets.push("filter_keywords = ?".into()); args.push(v.map(|s| s.to_string())); }
+    if let Some(v) = priority { sets.push("priority = ?".into()); args.push(Some(v.to_string())); }
+    if let Some(v) = stop_on_match { sets.push("stop_on_match = ?".into()); args.push(Some(if v { "1" } else { "0" }.to_string())); }
+    if let Some(v) = chain_rule_id { sets.push("chain_rule_id = ?".into()); args.push(v.map(|s| s.to_string())); }
+
+    let sql = format!("UPDATE notification_routing_rules SET {} WHERE id = ?", sets.join(", "));
+    let mut query = sqlx::query(&sql);
+    for arg in &args {
+        match arg {
+            Some(v) => query = query.bind(v),
+            None => query = query.bind(None::<String>),
+        }
+    }
+    query = query.bind(id);
+    query.execute(pool).await?;
+    Ok(())
+}
+
+pub async fn toggle_routing_rule(
+    pool: &SqlitePool,
+    id: &str,
+    enabled: bool,
+) -> Result<(), sqlx::Error> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let val: i32 = if enabled { 1 } else { 0 };
+    sqlx::query("UPDATE notification_routing_rules SET is_enabled = ?, updated_at = ? WHERE id = ?")
+        .bind(val).bind(&now).bind(id)
+        .execute(pool).await?;
+    Ok(())
+}
+
+pub async fn delete_routing_rule(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM notification_routing_rules WHERE id = ?")
+        .bind(id)
+        .execute(pool).await?;
+    Ok(result.rows_affected() > 0)
+}
+
+// --- Routing Log functions ---
+
+pub async fn insert_routing_log(
+    pool: &SqlitePool,
+    rule_id: &str,
+    notification_id: &str,
+    destination_type: &str,
+    status: &str,
+    error_message: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO notification_routing_log (rule_id, notification_id, destination_type, status, error_message) VALUES (?, ?, ?, ?, ?)"
+    )
+    .bind(rule_id).bind(notification_id).bind(destination_type).bind(status).bind(error_message)
+    .execute(pool).await?;
+    Ok(())
+}
+
+pub async fn get_routing_log(
+    pool: &SqlitePool,
+    rule_id: Option<&str>,
+    limit: i64,
+) -> Result<Vec<crate::models::RoutingLogEntry>, sqlx::Error> {
+    if let Some(rid) = rule_id {
+        sqlx::query_as::<_, crate::models::RoutingLogEntry>(
+            "SELECT * FROM notification_routing_log WHERE rule_id = ? ORDER BY executed_at DESC LIMIT ?"
+        )
+        .bind(rid).bind(limit)
+        .fetch_all(pool).await
+    } else {
+        sqlx::query_as::<_, crate::models::RoutingLogEntry>(
+            "SELECT * FROM notification_routing_log ORDER BY executed_at DESC LIMIT ?"
+        )
+        .bind(limit)
+        .fetch_all(pool).await
+    }
+}
+
+// --- Extended notification insert (with provider fields) ---
+
+pub async fn insert_provider_notification(
+    pool: &SqlitePool,
+    req: &CreateNotificationRequest,
+    account_id: &str,
+    provider: &str,
+    provider_message_id: Option<&str>,
+    provider_channel_name: Option<&str>,
+    provider_channel_id: Option<&str>,
+    provider_avatar_url: Option<&str>,
+    provider_author: Option<&str>,
+) -> Result<Notification, sqlx::Error> {
+    let id = Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    let source = req.source.as_deref().unwrap_or("unknown");
+    let event_type = req.event_type.as_deref().unwrap_or("notification");
+    let metadata = req.metadata.as_ref().map(|m| m.to_string());
+
+    sqlx::query(
+        "INSERT INTO notifications (id, source, event_type, title, body, metadata, project, tmux_session, tmux_window, tmux_pane, is_read, created_at, account_id, provider, provider_message_id, provider_channel_name, provider_channel_id, provider_avatar_url, provider_author)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(&id).bind(source).bind(event_type)
+    .bind(&req.title).bind(&req.body).bind(&metadata)
+    .bind(&req.project).bind(&req.tmux_session).bind(&req.tmux_window).bind(&req.tmux_pane)
+    .bind(&now)
+    .bind(account_id).bind(provider).bind(provider_message_id)
+    .bind(provider_channel_name).bind(provider_channel_id)
+    .bind(provider_avatar_url).bind(provider_author)
+    .execute(pool).await?;
+
+    let notification = sqlx::query_as::<_, Notification>("SELECT * FROM notifications WHERE id = ?")
+        .bind(&id)
+        .fetch_one(pool)
+        .await?;
+
+    Ok(notification)
 }
 
 #[cfg(test)]

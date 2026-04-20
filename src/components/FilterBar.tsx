@@ -1,13 +1,24 @@
 import { useState, useEffect } from "react";
+import type { NotificationProvider } from "../lib/types";
+import { PROVIDER_COLORS } from "../lib/types";
 
 interface FilterBarProps {
   onSearchChange: (search: string) => void;
   onFilterChange: (filter: "all" | "unread" | "read") => void;
   activeFilter: "all" | "unread" | "read";
   searchRef?: React.RefObject<HTMLInputElement>;
+  providerFilter?: NotificationProvider | null;
+  onProviderFilterChange?: (provider: NotificationProvider | null) => void;
 }
 
-export function FilterBar({ onSearchChange, onFilterChange, activeFilter, searchRef }: FilterBarProps) {
+const PROVIDER_OPTIONS: { key: NotificationProvider; label: string }[] = [
+  { key: "discord", label: "Discord" },
+  { key: "slack", label: "Slack" },
+  { key: "yapture", label: "Yapture" },
+  { key: "terminal", label: "Terminal" },
+];
+
+export function FilterBar({ onSearchChange, onFilterChange, activeFilter, searchRef, providerFilter, onProviderFilterChange }: FilterBarProps) {
   const [search, setSearch] = useState("");
 
   useEffect(() => {
@@ -31,7 +42,7 @@ export function FilterBar({ onSearchChange, onFilterChange, activeFilter, search
         placeholder="Search notifications..."
         className="w-full px-3 py-1.5 text-xs bg-surface-overlay border border-border-subtle rounded-md text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent transition-colors"
       />
-      <div className="flex gap-1">
+      <div className="flex items-center gap-1">
         {filters.map((f) => (
           <button
             key={f.key}
@@ -45,6 +56,28 @@ export function FilterBar({ onSearchChange, onFilterChange, activeFilter, search
             {f.label}
           </button>
         ))}
+        {onProviderFilterChange && (
+          <>
+            <div className="w-px h-4 bg-border-subtle mx-1" />
+            {PROVIDER_OPTIONS.map((p) => {
+              const colors = PROVIDER_COLORS[p.key];
+              const isActive = providerFilter === p.key;
+              return (
+                <button
+                  key={p.key}
+                  onClick={() => onProviderFilterChange(isActive ? null : p.key)}
+                  className={`px-2 py-1 text-[11px] font-medium rounded-md transition-colors ${
+                    isActive
+                      ? `${colors.badge} ${colors.text}`
+                      : "text-text-tertiary hover:text-text-secondary hover:bg-surface-overlay"
+                  }`}
+                >
+                  {p.label}
+                </button>
+              );
+            })}
+          </>
+        )}
       </div>
     </div>
   );

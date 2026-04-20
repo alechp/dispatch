@@ -23,3 +23,8 @@ dist-ssr
 *.sln
 *.sw?
 .worktrees/
+.env
+.env.*
+
+# Rust build artifacts
+relay/target/

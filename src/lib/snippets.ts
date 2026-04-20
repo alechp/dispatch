@@ -1,8 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { EmojiPackStatus, Snippet, SnippetSource, SyncResult } from "./types";
 
-export async function listSnippets(search?: string, tag?: string, sourceId?: string): Promise<Snippet[]> {
-  return invoke("list_snippets", { search: search ?? null, tag: tag ?? null, sourceId: sourceId ?? null });
+export async function listSnippets(search?: string, tag?: string, sourceId?: string, limit?: number): Promise<Snippet[]> {
+  return invoke("list_snippets", { search: search ?? null, tag: tag ?? null, sourceId: sourceId ?? null, limit: limit ?? null });
 }
 
 export async function createSnippet(data: {
@@ -149,4 +149,22 @@ export async function updateEmojiPack(): Promise<SyncResult> {
 
 export async function uninstallEmojiPack(): Promise<void> {
   return invoke("uninstall_emoji_pack");
+}
+
+// --- Kaomoji Pack ---
+
+export async function getKaomojiPackStatus(): Promise<EmojiPackStatus> {
+  return invoke<EmojiPackStatus>("get_kaomoji_pack_status");
+}
+
+export async function installKaomojiPack(): Promise<SyncResult> {
+  return invoke<SyncResult>("install_kaomoji_pack");
+}
+
+export async function updateKaomojiPack(): Promise<SyncResult> {
+  return invoke<SyncResult>("update_kaomoji_pack");
+}
+
+export async function uninstallKaomojiPack(): Promise<void> {
+  return invoke("uninstall_kaomoji_pack");
 }

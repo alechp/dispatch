@@ -5,11 +5,16 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::db;
+use crate::discord;
 use crate::emoji_pack;
 use crate::expander;
+use crate::kaomoji_pack;
 use crate::macos_accessibility;
+use crate::macos_notifications;
 use crate::models;
 use crate::models::{NotificationResponse, QueryParams};
+use crate::routing;
+use crate::slack;
 use crate::state::AppState;
 use crate::trigger_cache;
 use crate::yapture;
@@ -367,11 +372,12 @@ pub async fn list_snippets(
     search: Option<String>,
     tag: Option<String>,
     source_id: Option<String>,
+    limit: Option<i64>,
 ) -> Result<Vec<models::Snippet>, String> {
     let search_ref = search.as_deref();
     let tag_ref = tag.as_deref();
     let source_id_ref = source_id.as_deref();
-    db::list_snippets(&state.db, search_ref, tag_ref, source_id_ref)
+    db::list_snippets(&state.db, search_ref, tag_ref, source_id_ref, limit)
         .await
         .map_err(|e| e.to_string())
 }
@@ -526,6 +532,167 @@ pub async fn uninstall_emoji_pack(state: State<'_, Arc<AppState>>) -> Result<boo
         Ok(removed)
     } else {
         let path = emoji_pack_source_path().await?;
+        if path.exists() {
+            let _ = std::fs::remove_file(&path);
+        }
+        Ok(false)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Kaomoji Pack commands
+// ---------------------------------------------------------------------------
+
+async fn kaomoji_pack_source_path() -> Result<std::path::PathBuf, String> {
+    let expansions_dir = dirs::home_dir()
+        .ok_or("Could not determine home directory")?
+        .join(".config/dispatch/expansions");
+    std::fs::create_dir_all(&expansions_dir)
+        .map_err(|e| format!("Failed to create expansions dir: {}", e))?;
+    Ok(kaomoji_pack::kaomoji_pack_path(&expansions_dir))
+}
+
+async fn ensure_kaomoji_pack_source(
+    pool: &sqlx::SqlitePool,
+) -> Result<models::SnippetSource, String> {
+    let path = kaomoji_pack_source_path().await?;
+    let path_str = path.to_string_lossy().to_string();
+    let source = if let Some(source) =
+        db::get_snippet_source_by_managed_key(pool, kaomoji_pack::KAOMOJI_PACK_MANAGED_KEY)
+            .await
+            .map_err(|e| e.to_string())?
+    {
+        if source.path != path_str {
+            if std::path::Path::new(&source.path).exists() {
+                let _ = std::fs::remove_file(&source.path);
+            }
+            sqlx::query("UPDATE snippet_sources SET name = ?, path = ?, updated_at = ? WHERE id = ?")
+                .bind(kaomoji_pack::KAOMOJI_PACK_NAME)
+                .bind(&path_str)
+                .bind(chrono::Utc::now().to_rfc3339())
+                .bind(&source.id)
+                .execute(pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        source
+    } else {
+        db::create_snippet_source(
+            pool,
+            kaomoji_pack::KAOMOJI_PACK_NAME,
+            &path_str,
+            false,
+        )
+        .await
+        .map_err(|e| e.to_string())?
+    };
+
+    let item_count = kaomoji_pack::kaomoji_pack_count()
+        .map_err(|e| format!("Failed to parse kaomoji pack template: {}", e))?
+        as i64;
+    db::set_snippet_source_metadata(
+        pool,
+        &source.id,
+        Some("kaomoji_pack"),
+        Some(kaomoji_pack::KAOMOJI_PACK_VERSION),
+        Some(item_count),
+        Some(kaomoji_pack::KAOMOJI_PACK_MANAGED_KEY),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    db::get_snippet_source(pool, &source.id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Kaomoji pack source disappeared after creation".to_string())
+}
+
+#[tauri::command]
+pub async fn get_kaomoji_pack_status(
+    state: State<'_, Arc<AppState>>,
+) -> Result<models::EmojiPackStatus, String> {
+    let source =
+        db::get_snippet_source_by_managed_key(&state.db, kaomoji_pack::KAOMOJI_PACK_MANAGED_KEY)
+            .await
+            .map_err(|e| e.to_string())?;
+    let path = kaomoji_pack_source_path().await?;
+    let expected_count = kaomoji_pack::kaomoji_pack_count()
+        .map_err(|e| format!("Failed to parse kaomoji pack template: {}", e))?
+        as i64;
+
+    let installed_count = if let Some(ref source) = source {
+        db::count_snippets_for_source(&state.db, &source.id)
+            .await
+            .map_err(|e| e.to_string())?
+    } else {
+        0
+    };
+    let path_str = source
+        .as_ref()
+        .map(|s| s.path.clone())
+        .unwrap_or_else(|| path.to_string_lossy().to_string());
+    let enabled = source.as_ref().map(|s| s.is_enabled == 1).unwrap_or(false);
+    let file_exists = source
+        .as_ref()
+        .map(|s| std::path::Path::new(&s.path).exists())
+        .unwrap_or_else(|| path.exists());
+    let installed = source.is_some();
+
+    Ok(models::EmojiPackStatus {
+        managed_key: kaomoji_pack::KAOMOJI_PACK_MANAGED_KEY.to_string(),
+        name: kaomoji_pack::KAOMOJI_PACK_NAME.to_string(),
+        path: path_str,
+        version: kaomoji_pack::KAOMOJI_PACK_VERSION.to_string(),
+        expected_count,
+        installed_count,
+        installed,
+        enabled,
+        file_exists,
+        source,
+    })
+}
+
+#[tauri::command]
+pub async fn install_kaomoji_pack(
+    state: State<'_, Arc<AppState>>,
+) -> Result<models::SyncResult, String> {
+    let source = ensure_kaomoji_pack_source(&state.db).await?;
+    kaomoji_pack::write_kaomoji_pack_file(std::path::Path::new(&source.path))?;
+
+    let result = sync_source_internal(&state.db, &source).await?;
+    let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn update_kaomoji_pack(
+    state: State<'_, Arc<AppState>>,
+) -> Result<models::SyncResult, String> {
+    let source = ensure_kaomoji_pack_source(&state.db).await?;
+    kaomoji_pack::write_kaomoji_pack_file(std::path::Path::new(&source.path))?;
+
+    let result = sync_source_internal(&state.db, &source).await?;
+    let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn uninstall_kaomoji_pack(state: State<'_, Arc<AppState>>) -> Result<bool, String> {
+    if let Some(source) =
+        db::get_snippet_source_by_managed_key(&state.db, kaomoji_pack::KAOMOJI_PACK_MANAGED_KEY)
+            .await
+            .map_err(|e| e.to_string())?
+    {
+        if std::path::Path::new(&source.path).exists() {
+            let _ = std::fs::remove_file(&source.path);
+        }
+        let removed = db::delete_snippet_source(&state.db, &source.id)
+            .await
+            .map_err(|e| e.to_string())?;
+        let _ = trigger_cache::refresh_trigger_cache(&state.db, &state.trigger_cache).await;
+        Ok(removed)
+    } else {
+        let path = kaomoji_pack_source_path().await?;
         if path.exists() {
             let _ = std::fs::remove_file(&path);
         }
@@ -1666,4 +1833,515 @@ pub async fn test_text_injection() -> Result<String, String> {
     .map_err(|e| format!("spawn_blocking failed: {}", e))?;
 
     Ok(result)
+}
+
+// =============================================================================
+// Notification Account Commands
+// =============================================================================
+
+#[tauri::command]
+pub async fn list_notification_accounts(
+    state: State<'_, Arc<AppState>>,
+    provider: Option<String>,
+) -> Result<Vec<models::NotificationAccount>, String> {
+    db::list_notification_accounts(&state.db, provider.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_notification_account(
+    state: State<'_, Arc<AppState>>,
+    account_id: String,
+) -> Result<models::NotificationAccount, String> {
+    db::get_notification_account(&state.db, &account_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Account not found".to_string())
+}
+
+#[tauri::command]
+pub async fn update_notification_account_label(
+    state: State<'_, Arc<AppState>>,
+    account_id: String,
+    label: String,
+) -> Result<(), String> {
+    db::update_notification_account_label(&state.db, &account_id, &label)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn toggle_notification_account(
+    state: State<'_, Arc<AppState>>,
+    account_id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    db::toggle_notification_account(&state.db, &account_id, enabled)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_notification_account(
+    state: State<'_, Arc<AppState>>,
+    account_id: String,
+) -> Result<bool, String> {
+    db::delete_notification_account(&state.db, &account_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_account_screen_toggles(
+    state: State<'_, Arc<AppState>>,
+    account_id: String,
+) -> Result<Vec<(String, bool)>, String> {
+    db::get_account_screen_toggles(&state.db, &account_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_account_screen_toggle(
+    state: State<'_, Arc<AppState>>,
+    account_id: String,
+    screen_key: String,
+    enabled: bool,
+) -> Result<(), String> {
+    db::set_account_screen_toggle(&state.db, &account_id, &screen_key, enabled)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_monitored_channels(
+    state: State<'_, Arc<AppState>>,
+    account_id: String,
+    channel_ids: Vec<String>,
+) -> Result<(), String> {
+    db::set_monitored_channels(&state.db, &account_id, &channel_ids)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn test_account_connection(
+    state: State<'_, Arc<AppState>>,
+    account_id: String,
+) -> Result<String, String> {
+    let account = db::get_notification_account(&state.db, &account_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("Account not found")?;
+
+    let http = reqwest::Client::new();
+    match account.provider.as_str() {
+        "discord" => {
+            let user = discord::test_connection(&http, &account.access_token).await?;
+            Ok(format!("Connected as {}", user.display_name()))
+        }
+        "slack" => {
+            let auth = slack::test_connection(&http, &account.access_token).await?;
+            Ok(format!("Connected as {} in {}",
+                auth.user.unwrap_or_default(), auth.team.unwrap_or_default()))
+        }
+        _ => Err(format!("Unknown provider: {}", account.provider)),
+    }
+}
+
+// =============================================================================
+// Discord Commands
+// =============================================================================
+
+#[tauri::command]
+pub async fn discord_start_oauth(
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    let (auth_url, oauth_state) = discord::start_oauth_flow();
+
+    let mut pending = state.oauth_pending_integration.lock()
+        .map_err(|e| format!("Lock error: {}", e))?;
+    *pending = Some(crate::state::PendingIntegrationOAuth {
+        provider: "discord".to_string(),
+        state: oauth_state.state,
+        code_verifier: Some(oauth_state.code_verifier),
+    });
+
+    Ok(auth_url)
+}
+
+#[tauri::command]
+pub async fn discord_fetch_channels(
+    state: State<'_, Arc<AppState>>,
+    account_id: String,
+) -> Result<Vec<discord::GuildWithChannels>, String> {
+    let account = db::get_notification_account(&state.db, &account_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("Account not found")?;
+
+    let http = reqwest::Client::new();
+    discord::fetch_all_guild_channels(&http, &account.access_token).await
+}
+
+// =============================================================================
+// Slack Commands
+// =============================================================================
+
+#[tauri::command]
+pub async fn slack_start_oauth(
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    let (auth_url, oauth_state) = slack::start_oauth_flow();
+
+    let mut pending = state.oauth_pending_integration.lock()
+        .map_err(|e| format!("Lock error: {}", e))?;
+    *pending = Some(crate::state::PendingIntegrationOAuth {
+        provider: "slack".to_string(),
+        state: oauth_state.state,
+        code_verifier: None,
+    });
+
+    Ok(auth_url)
+}
+
+#[tauri::command]
+pub async fn slack_fetch_conversations(
+    state: State<'_, Arc<AppState>>,
+    account_id: String,
+) -> Result<Vec<slack::SlackConversation>, String> {
+    let account = db::get_notification_account(&state.db, &account_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("Account not found")?;
+
+    let http = reqwest::Client::new();
+    slack::fetch_all_conversations(&http, &account.access_token).await
+}
+
+// =============================================================================
+// Slack Relay Commands
+// =============================================================================
+
+#[tauri::command]
+pub async fn slack_relay_save_config(
+    state: State<'_, Arc<AppState>>,
+    relay_url: String,
+    api_key: String,
+    poll_interval: Option<u64>,
+) -> Result<(), String> {
+    db::set_setting(&state.db, "slack_relay_url", &relay_url)
+        .await
+        .map_err(|e| e.to_string())?;
+    db::set_setting(&state.db, "slack_relay_api_key", &api_key)
+        .await
+        .map_err(|e| e.to_string())?;
+    let interval = poll_interval.unwrap_or(30);
+    db::set_setting(&state.db, "slack_relay_poll_interval", &interval.to_string())
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn slack_relay_test_connection(
+    relay_url: String,
+) -> Result<String, String> {
+    crate::slack_poller::test_relay_connection(&relay_url).await?;
+    Ok("Relay server is reachable".to_string())
+}
+
+#[tauri::command]
+pub async fn slack_relay_start_polling(
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let relay_url = db::get_setting(&state.db, "slack_relay_url")
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("slack_relay_url not configured")?;
+
+    let api_key = db::get_setting(&state.db, "slack_relay_api_key")
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("slack_relay_api_key not configured")?;
+
+    let interval: u64 = db::get_setting(&state.db, "slack_relay_poll_interval")
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30);
+
+    // Find a slack account to associate notifications with (use first enabled slack account)
+    let accounts = db::list_notification_accounts(&state.db, Some("slack"))
+        .await
+        .map_err(|e| e.to_string())?;
+    let account_id = accounts
+        .first()
+        .map(|a| a.id.clone())
+        .unwrap_or_else(|| "slack-relay".to_string());
+
+    // Stop existing poller if running
+    {
+        let mut guard = state.slack_poller_stop.lock().map_err(|e| format!("Lock error: {}", e))?;
+        if let Some(stop_tx) = guard.take() {
+            let _ = stop_tx.send(true);
+        }
+    }
+
+    let stop_tx = crate::slack_poller::start_polling(
+        state.db.clone(),
+        state.tx.clone(),
+        relay_url,
+        api_key,
+        interval,
+        account_id,
+    );
+
+    let mut guard = state.slack_poller_stop.lock().map_err(|e| format!("Lock error: {}", e))?;
+    *guard = Some(stop_tx);
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn slack_relay_stop_polling(
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let mut guard = state.slack_poller_stop.lock().map_err(|e| format!("Lock error: {}", e))?;
+    if let Some(stop_tx) = guard.take() {
+        let _ = stop_tx.send(true);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn slack_relay_status(
+    state: State<'_, Arc<AppState>>,
+) -> Result<serde_json::Value, String> {
+    let is_running = {
+        let guard = state.slack_poller_stop.lock().map_err(|e| format!("Lock error: {}", e))?;
+        guard.is_some()
+    };
+
+    let last_poll = db::get_setting(&state.db, "slack_relay_last_poll")
+        .await
+        .ok()
+        .flatten();
+
+    let relay_url = db::get_setting(&state.db, "slack_relay_url")
+        .await
+        .ok()
+        .flatten();
+
+    let interval: u64 = db::get_setting(&state.db, "slack_relay_poll_interval")
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30);
+
+    Ok(serde_json::json!({
+        "is_running": is_running,
+        "last_poll": last_poll,
+        "relay_url": relay_url,
+        "poll_interval": interval,
+    }))
+}
+
+// =============================================================================
+// Routing Rule Commands
+// =============================================================================
+
+#[tauri::command]
+pub async fn list_routing_rules(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<models::RoutingRule>, String> {
+    db::list_routing_rules(&state.db)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_routing_rule(
+    state: State<'_, Arc<AppState>>,
+    rule_id: String,
+) -> Result<models::RoutingRule, String> {
+    db::get_routing_rule(&state.db, &rule_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Rule not found".to_string())
+}
+
+#[tauri::command]
+pub async fn create_routing_rule(
+    state: State<'_, Arc<AppState>>,
+    name: String,
+    source_type: String,
+    source_value: Option<String>,
+    destination_type: String,
+    destination_config: String,
+    template: Option<String>,
+    filter_event_types: Option<String>,
+    filter_keywords: Option<String>,
+    priority: Option<i32>,
+    stop_on_match: Option<bool>,
+    chain_rule_id: Option<String>,
+) -> Result<models::RoutingRule, String> {
+    db::create_routing_rule(
+        &state.db, &name, &source_type, source_value.as_deref(),
+        &destination_type, &destination_config,
+        template.as_deref(), filter_event_types.as_deref(),
+        filter_keywords.as_deref(), priority.unwrap_or(0),
+        stop_on_match.unwrap_or(false), chain_rule_id.as_deref(),
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_routing_rule(
+    state: State<'_, Arc<AppState>>,
+    rule_id: String,
+    name: Option<String>,
+    source_type: Option<String>,
+    source_value: Option<Option<String>>,
+    destination_type: Option<String>,
+    destination_config: Option<String>,
+    template: Option<Option<String>>,
+    filter_event_types: Option<Option<String>>,
+    filter_keywords: Option<Option<String>>,
+    priority: Option<i32>,
+    stop_on_match: Option<bool>,
+    chain_rule_id: Option<Option<String>>,
+) -> Result<(), String> {
+    db::update_routing_rule(
+        &state.db, &rule_id, name.as_deref(), source_type.as_deref(),
+        source_value.as_ref().map(|o| o.as_deref()),
+        destination_type.as_deref(), destination_config.as_deref(),
+        template.as_ref().map(|o| o.as_deref()),
+        filter_event_types.as_ref().map(|o| o.as_deref()),
+        filter_keywords.as_ref().map(|o| o.as_deref()),
+        priority, stop_on_match,
+        chain_rule_id.as_ref().map(|o| o.as_deref()),
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_routing_rule(
+    state: State<'_, Arc<AppState>>,
+    rule_id: String,
+) -> Result<bool, String> {
+    db::delete_routing_rule(&state.db, &rule_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn toggle_routing_rule(
+    state: State<'_, Arc<AppState>>,
+    rule_id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    db::toggle_routing_rule(&state.db, &rule_id, enabled)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn test_routing_rule(
+    state: State<'_, Arc<AppState>>,
+    rule_id: String,
+) -> Result<String, String> {
+    let rule = db::get_routing_rule(&state.db, &rule_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("Rule not found")?;
+
+    let eval_rule = routing::EvaluationRule {
+        id: rule.id, name: rule.name, is_enabled: rule.is_enabled == 1,
+        source_type: rule.source_type, source_value: rule.source_value,
+        destination_type: rule.destination_type, destination_config: rule.destination_config,
+        template: rule.template, filter_event_types: rule.filter_event_types,
+        filter_keywords: rule.filter_keywords, priority: rule.priority,
+        stop_on_match: rule.stop_on_match == 1, chain_rule_id: rule.chain_rule_id,
+    };
+
+    let test_notif = routing::EvaluationNotification {
+        id: "test".to_string(), title: "Test Notification".to_string(),
+        body: Some("This is a test from Dispatch routing".to_string()),
+        source: "dispatch:test".to_string(), event_type: "notification".to_string(),
+        provider: Some("terminal".to_string()), account_id: None,
+        project: Some("dispatch".to_string()), provider_author: Some("Dispatch".to_string()),
+        provider_channel_name: Some("#test".to_string()),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+
+    let rules = vec![eval_rule];
+    let matches = routing::evaluate_matching_rules(&rules, &test_notif);
+    if matches.is_empty() {
+        Ok("Rule did not match the test notification".to_string())
+    } else {
+        let ctx = routing::build_template_context(&test_notif);
+        let rendered = routing::render_template(matches[0].template.as_deref(), &ctx);
+        Ok(format!("Rule matched. Rendered: {}", rendered))
+    }
+}
+
+#[tauri::command]
+pub async fn get_routing_log(
+    state: State<'_, Arc<AppState>>,
+    rule_id: Option<String>,
+    limit: Option<i64>,
+) -> Result<Vec<models::RoutingLogEntry>, String> {
+    db::get_routing_log(&state.db, rule_id.as_deref(), limit.unwrap_or(50))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn validate_routing_chain(
+    state: State<'_, Arc<AppState>>,
+    rule_id: String,
+    chain_rule_id: String,
+) -> Result<bool, String> {
+    let rules = db::list_routing_rules(&state.db).await.map_err(|e| e.to_string())?;
+    let get_chain = |id: &str| -> Option<String> {
+        rules.iter().find(|r| r.id == id).and_then(|r| r.chain_rule_id.clone())
+    };
+    routing::validate_chain(&rule_id, &chain_rule_id, &get_chain).map(|_| true)
+}
+
+// =============================================================================
+// macOS Push Notification Commands
+// =============================================================================
+
+#[tauri::command]
+pub async fn get_macos_push_config(
+    state: State<'_, Arc<AppState>>,
+) -> Result<macos_notifications::MacOSPushConfig, String> {
+    let json = db::get_setting(&state.db, "macos_push_config")
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(json.map(|j| macos_notifications::parse_config(&j))
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+pub async fn set_macos_push_config(
+    state: State<'_, Arc<AppState>>,
+    config: macos_notifications::MacOSPushConfig,
+) -> Result<(), String> {
+    let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+    db::set_setting(&state.db, "macos_push_config", &json)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn send_test_push() -> Result<String, String> {
+    Ok("Test push prepared: 'Dispatch Test' — Configure tauri-plugin-notification to enable delivery.".to_string())
 }
